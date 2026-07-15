@@ -17,7 +17,7 @@ if (!window.APP_CONFIG || !window.APP_CONFIG.SUPABASE_URL || window.APP_CONFIG.S
   throw new Error('Missing Supabase config');
 }
 
-const supabase = window.supabase.createClient(
+const supabaseClient = window.supabase.createClient(
   window.APP_CONFIG.SUPABASE_URL,
   window.APP_CONFIG.SUPABASE_ANON_KEY
 );
@@ -85,7 +85,7 @@ document.getElementById('login-submit').onclick = async ()=>{
 
   btn.disabled = true; btn.textContent = 'Đang đăng nhập...';
   try{
-    const { error: authError } = await supabase.auth.signInWithPassword({ email, password });
+    const { error: authError } = await supabaseClient.auth.signInWithPassword({ email, password });
     if(authError){
       errEl.textContent = 'Sai email hoặc mật khẩu. Vui lòng thử lại.';
       return;
@@ -93,7 +93,7 @@ document.getElementById('login-submit').onclick = async ()=>{
     const ok = await loadStaffProfile();
     if(!ok){
       errEl.textContent = 'Tài khoản chưa được gán vai trò. Vui lòng liên hệ CEO để kiểm tra bảng staff_accounts.';
-      await supabase.auth.signOut();
+      await supabaseClient.auth.signOut();
       return;
     }
     enterDashboard();
@@ -107,10 +107,10 @@ document.getElementById('login-password').addEventListener('keydown', (e)=>{
 });
 
 async function loadStaffProfile(){
-  const { data: userData } = await supabase.auth.getUser();
+  const { data: userData } = await supabaseClient.auth.getUser();
   const user = userData && userData.user;
   if(!user) return false;
-  const { data, error } = await supabase
+  const { data, error } = await supabaseClient
     .from('staff_accounts')
     .select('role, department')
     .eq('id', user.id)
@@ -121,8 +121,8 @@ async function loadStaffProfile(){
 }
 
 async function logoutStaff(){
-  if(realtimeChannel){ supabase.removeChannel(realtimeChannel); realtimeChannel = null; }
-  await supabase.auth.signOut();
+  if(realtimeChannel){ supabaseClient.removeChannel(realtimeChannel); realtimeChannel = null; }
+  await supabaseClient.auth.signOut();
   staffSession = null;
   document.getElementById('role-badge-slot').innerHTML = '';
   renderLoginGate();
@@ -144,7 +144,7 @@ function enterDashboard(){
 
 function subscribeRealtime(){
   if(realtimeChannel) return;
-  realtimeChannel = supabase
+  realtimeChannel = supabaseClient
     .channel('dashboard-changes')
     .on('postgres_changes', { event: '*', schema: 'public', table: 'survey_responses' }, ()=>{ refreshDashboard(); })
     .subscribe();
@@ -194,7 +194,7 @@ function filterRangeBounds(){
 async function refreshDashboard(){
   if(!staffSession) return;
   const { from, to } = filterRangeBounds();
-  let query = supabase
+  let query = supabaseClient
     .from('survey_responses')
     .select('*, referrals(*)')
     .order('created_at', { ascending: false })
@@ -257,7 +257,7 @@ async function toggleResolved(id){
   if(!e) return;
   const nextResolved = !e.resolved;
   const resolvedBy = nextResolved ? (staffSession.role==='ceo' ? 'CEO' : `Trưởng khoa ${staffSession.department}`) : null;
-  const { error } = await supabase
+  const { error } = await supabaseClient
     .from('survey_responses')
     .update({
       resolved: nextResolved,
@@ -434,7 +434,7 @@ function renderPatient(){
 
 async function submitEntry(){
   try{
-    const { data: inserted, error: insertError } = await supabase
+    const { data: inserted, error: insertError } = await supabaseClient
       .from('survey_responses')
       .insert({
         department: current.dept,
@@ -456,7 +456,7 @@ async function submitEntry(){
       .map(r => ({ survey_response_id: inserted.id, name: r.name || null, phone: r.phone || null }));
 
     if(referralRows.length){
-      const { error: refError } = await supabase.from('referrals').insert(referralRows);
+      const { error: refError } = await supabaseClient.from('referrals').insert(referralRows);
       if(refError) throw refError;
     }
     return true;
@@ -585,14 +585,14 @@ function escapeHtml(s){
 /* ---------------- Init ---------------- */
 renderPatient();
 
-supabase.auth.onAuthStateChange((event)=>{
+supabaseClient.auth.onAuthStateChange((event)=>{
   if(event === 'SIGNED_OUT'){
     staffSession = null;
   }
 });
 
 (async function initSession(){
-  const { data } = await supabase.auth.getSession();
+  const { data } = await supabaseClient.auth.getSession();
   if(data && data.session){
     const ok = await loadStaffProfile();
     if(ok && viewDash.classList.contains('active')){
