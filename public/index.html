@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Việt Pháp · Đo lường trải nghiệm khách hàng</title>
+<style>
+  :root{
+    --cream:#F6F8F3;
+    --cream-2:#EDF2E7;
+    --dark:#0E6B24;
+    --dark-2:#073C14;
+    --gold:#D9A441;
+    --gold-deep:#B9832E;
+    --green-soft:#E5F3E6;
+    --green-text:#0E5A20;
+    --red-soft:#FBE9E7;
+    --red-text:#A13327;
+    --brand-red:#D42A1F;
+    --ink:#20241F;
+    --ink-mute:#666B5F;
+    --line:#DCE3D6;
+    font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;background:var(--cream);color:var(--ink);}
+  body{min-height:100vh;}
+
+  /* ---------- Shell / view switch ---------- */
+  .shell{max-width:1180px;margin:0 auto;padding:18px 18px 60px;}
+  .topbar{
+    display:flex;align-items:center;justify-content:space-between;
+    gap:12px;flex-wrap:wrap;margin-bottom:22px;
+  }
+  .brand{display:flex;align-items:center;gap:10px;}
+  .brand-mark{
+    width:48px;height:48px;border-radius:50%;background:#fff;
+    display:flex;align-items:center;justify-content:center;
+    flex:none;overflow:hidden;border:1px solid var(--line);
+    box-shadow:0 2px 8px rgba(14,107,36,0.15);
+  }
+  .brand-mark img{width:100%;height:100%;object-fit:contain;}
+  .brand-text{line-height:1.15;}
+  .brand-text b{font-size:14.5px;color:var(--dark);}
+  .brand-text span{display:block;font-size:11.5px;color:var(--ink-mute);}
+
+  .switcher{
+    display:flex;background:#fff;border:1px solid var(--line);border-radius:999px;padding:3px;gap:2px;
+  }
+  .switcher button{
+    border:none;background:transparent;padding:8px 16px;border-radius:999px;
+    font-size:13px;font-weight:700;cursor:pointer;color:var(--ink-mute);
+  }
+  .switcher button.active{background:var(--dark);color:#fff;}
+
+  .view{display:none;}
+  .view.active{display:block;}
+
+  /* ================= PATIENT VIEW ================= */
+  .phone-wrap{display:flex;justify-content:center;}
+  .phone{
+    width:100%;max-width:440px;background:var(--dark);border-radius:34px;
+    padding:14px;box-shadow:0 20px 50px rgba(22,53,42,0.25);
+  }
+  .phone-screen{
+    background:var(--cream);border-radius:24px;min-height:700px;
+    padding:24px 22px 28px;position:relative;overflow:hidden;
+  }
+  .notch{
+    position:absolute;top:8px;left:50%;transform:translateX(-50%);
+    width:90px;height:18px;background:rgba(0,0,0,0.32);border-radius:12px;
+    z-index:2;
+  }
+  .p-header{
+    margin:-24px -22px 22px -22px;
+    padding:30px 22px 24px;
+    text-align:center;
+    background:linear-gradient(160deg, var(--dark) 0%, var(--dark-2) 100%);
+    border-radius:24px 24px 20px 20px;
+    position:relative;
+    overflow:hidden;
+  }
+  .p-header::after{
+    content:"";position:absolute;top:-30px;right:-30px;width:120px;height:120px;
+    border-radius:50%;background:var(--brand-red);opacity:0.16;
+  }
+  .p-header .logo-dot{
+    width:86px;height:86px;border-radius:50%;background:#fff;margin:0 auto 14px;
+    display:flex;align-items:center;justify-content:center;overflow:hidden;
+    border:3px solid rgba(255,255,255,0.95);box-shadow:0 8px 20px rgba(0,0,0,0.28);
+    position:relative;
+  }
+  .p-header .logo-dot img{width:86%;height:86%;object-fit:contain;}
+  .p-header b{display:block;font-size:19px;color:#fff;font-weight:800;position:relative;}
+  .p-header span{display:block;font-size:13.5px;color:#CFE6CF;margin-top:5px;position:relative;}
+  .p-header .thanks-line{
+    display:block;font-size:16.5px;font-weight:600;color:#FFFFFF;margin-top:12px;line-height:1.42;
+    padding:12px 12px 0;border-top:1px solid rgba(255,255,255,0.18);position:relative;
+  }
+
+  .step-title{font-size:25px;font-weight:800;color:var(--dark);line-height:1.22;margin-bottom:8px;}
+  .step-sub{font-size:16px;color:var(--ink-mute);margin-bottom:20px;line-height:1.42;}
+
+  .chip-grid{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:22px;}
+  .chip{
+    border:1.5px solid var(--line);background:#fff;border-radius:14px;padding:13px 17px;
+    font-size:16.5px;font-weight:600;cursor:pointer;color:var(--ink);
+  }
+  .chip.sel{border-color:var(--gold);background:var(--gold);color:var(--dark);}
+
+  .face-row{display:flex;justify-content:space-between;gap:7px;margin-bottom:6px;}
+  .face-item{flex:1;display:flex;flex-direction:column;align-items:stretch;gap:8px;}
+  .face-btn{
+    width:100%;aspect-ratio:1/1;border-radius:16px;border:2px solid var(--line);background:#fff;
+    display:flex;align-items:center;justify-content:center;font-size:44px;cursor:pointer;
+  }
+  .face-btn.sel{border-color:var(--gold);background:var(--green-soft);transform:scale(1.05);}
+  .face-item-label{
+    font-size:14.5px;font-weight:700;text-align:center;line-height:1.28;color:var(--ink);
+    min-height:2.6em;display:flex;align-items:flex-start;justify-content:center;
+  }
+  .face-item.sel .face-item-label{color:var(--dark);}
+
+  .nps-row{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px;}
+  .nps-btn{
+    width:40px;height:48px;border-radius:10px;border:1.5px solid var(--line);background:#fff;
+    font-size:16px;font-weight:700;cursor:pointer;color:var(--ink);
+  }
+  .nps-btn.sel{border-color:var(--dark);background:var(--dark);color:#fff;}
+  .nps-scale-labels{display:flex;justify-content:space-between;font-size:13px;color:var(--ink-mute);margin-bottom:26px;}
+
+  textarea.comment{
+    width:100%;border:1.5px solid var(--line);border-radius:12px;padding:14px;font-size:16px;
+    font-family:inherit;resize:none;min-height:86px;margin-bottom:24px;background:#fff;
+  }
+  textarea.comment:focus{outline:2px solid var(--gold);border-color:transparent;}
+
+  .btn-row{display:flex;gap:10px;}
+  .btn{
+    flex:1;border:none;border-radius:12px;padding:16px 18px;font-size:17px;font-weight:800;
+    cursor:pointer;text-align:center;
+  }
+  .btn-primary{background:var(--dark);color:#fff;}
+  .btn-primary:disabled{background:#C9C2AC;cursor:not-allowed;}
+  .btn-ghost{background:#fff;color:var(--dark);border:1.5px solid var(--line);}
+
+  .progress-dots{display:flex;gap:5px;justify-content:center;margin-bottom:20px;}
+  .progress-dots span{width:7px;height:7px;border-radius:50%;background:var(--line);}
+  .progress-dots span.on{background:var(--gold);}
+
+  .thanks{text-align:center;padding-top:60px;}
+  .thanks .big-check{
+    width:74px;height:74px;border-radius:50%;background:var(--green-soft);color:var(--green-text);
+    display:flex;align-items:center;justify-content:center;font-size:36px;margin:0 auto 18px;
+  }
+  .thanks h3{font-size:23px;color:var(--dark);margin-bottom:10px;}
+  .thanks p{font-size:16px;color:var(--ink-mute);line-height:1.5;padding:0 10px;}
+
+  .qr-hint{
+    margin-top:22px;background:#fff;border:1px dashed var(--line);border-radius:12px;
+    padding:14px;font-size:13.5px;color:var(--ink-mute);text-align:center;line-height:1.55;
+  }
+
+  .ref-row{
+    background:#fff;border:1.5px solid var(--line);border-radius:12px;
+    padding:12px;margin-bottom:10px;
+  }
+  .ref-row-label{font-size:13.5px;font-weight:700;color:var(--dark);margin-bottom:8px;}
+  .ref-row-label span{font-weight:400;color:var(--ink-mute);}
+  .ref-row-fields{display:flex;gap:8px;}
+  .ref-row .ref-input{
+    min-height:auto;padding:10px;font-size:15px;margin-bottom:0;width:100%;min-width:0;
+    box-sizing:border-box;border:1.5px solid var(--line);border-radius:10px;
+    font-family:inherit;background:#fff;color:var(--ink);
+  }
+  .ref-row .ref-input:focus{outline:2px solid var(--gold);border-color:transparent;}
+  .ref-row .ref-name{flex:0 0 36%;min-width:0;}
+  .ref-row .ref-phone{flex:1 1 0%;min-width:0;}
+
+  .form-error{
+    background:var(--red-soft);color:var(--red-text);border-radius:10px;padding:10px 12px;
+    font-size:13px;margin-bottom:16px;line-height:1.5;display:none;
+  }
+  .form-error.show{display:block;}
+
+  /* ================= DASHBOARD VIEW ================= */
+  .dash-head{display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:14px;margin-bottom:20px;}
+  .dash-head h2{font-size:22px;color:var(--dark);margin:0 0 4px;}
+  .dash-head p{font-size:13px;color:var(--ink-mute);margin:0;}
+  .dash-actions{display:flex;gap:8px;}
+  .btn-sm{
+    border:1.5px solid var(--line);background:#fff;border-radius:9px;padding:8px 14px;
+    font-size:12.5px;font-weight:700;cursor:pointer;color:var(--dark);
+  }
+  .btn-sm.warn{border-color:#E0B4AE;color:var(--red-text);}
+  .btn-sm:disabled{opacity:.55;cursor:default;}
+
+  .kpi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px;margin-bottom:22px;}
+  .kpi{background:#fff;border:1px solid var(--line);border-radius:14px;padding:16px 18px;}
+  .kpi .kpi-label{font-size:11.5px;font-weight:700;color:var(--ink-mute);letter-spacing:.3px;text-transform:uppercase;margin-bottom:6px;}
+  .kpi .kpi-value{font-size:28px;font-weight:800;color:var(--dark);}
+  .kpi .kpi-sub{font-size:11.5px;color:var(--ink-mute);margin-top:3px;}
+  .kpi.accent{background:var(--dark);}
+  .kpi.accent .kpi-label{color:#C9C2AC;}
+  .kpi.accent .kpi-value{color:var(--gold);}
+  .kpi.accent .kpi-sub{color:#B7B29C;}
+
+  .grid-2{display:grid;grid-template-columns:1.3fr 1fr;gap:16px;margin-bottom:16px;}
+  @media(max-width:860px){.grid-2{grid-template-columns:1fr;}}
+
+  .panel{background:#fff;border:1px solid var(--line);border-radius:14px;padding:18px 20px;}
+  .panel h3{font-size:14.5px;color:var(--dark);margin:0 0 14px;}
+
+  .bar-row{margin-bottom:12px;}
+  .bar-row .bar-top{display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:4px;}
+  .bar-row .bar-top b{color:var(--dark);}
+  .bar-track{height:9px;background:var(--cream-2);border-radius:6px;overflow:hidden;}
+  .bar-fill{height:100%;background:var(--gold);border-radius:6px;}
+
+  table.dept{width:100%;border-collapse:collapse;font-size:12.8px;}
+  table.dept th{text-align:left;color:var(--ink-mute);font-size:11px;text-transform:uppercase;padding-bottom:8px;border-bottom:1.5px solid var(--gold);}
+  table.dept td{padding:8px 0;border-bottom:1px solid var(--line);}
+  table.dept td.num{text-align:right;font-weight:700;color:var(--dark);}
+
+  .flag-item{
+    border-left:3px solid var(--red-text);background:var(--red-soft);border-radius:0 10px 10px 0;
+    padding:10px 12px;margin-bottom:10px;
+  }
+  .flag-item .flag-top{display:flex;justify-content:space-between;font-size:11.5px;color:var(--red-text);font-weight:700;margin-bottom:4px;}
+  .flag-item .flag-text{font-size:12.8px;color:#5A2620;line-height:1.4;}
+  .empty-state{font-size:12.5px;color:var(--ink-mute);text-align:center;padding:18px 0;}
+
+  .footnote{font-size:11px;color:var(--ink-mute);text-align:center;margin-top:26px;line-height:1.5;}
+
+  /* ================= LOGIN ================= */
+  .login-wrap{display:flex;justify-content:center;padding:30px 0;}
+  .login-card{width:100%;max-width:380px;background:#fff;border:1px solid var(--line);border-radius:16px;padding:26px 24px;box-shadow:0 12px 30px rgba(22,53,42,0.08);}
+  .login-card h3{font-size:18px;color:var(--dark);margin:0 0 4px;}
+  .login-card p{font-size:13px;color:var(--ink-mute);margin:0 0 18px;line-height:1.5;}
+  .login-field{margin-bottom:14px;}
+  .login-field label{display:block;font-size:12.5px;font-weight:700;color:var(--ink-mute);margin-bottom:6px;}
+  .login-field select,.login-field input{width:100%;border:1.5px solid var(--line);border-radius:10px;padding:11px 12px;font-size:15px;font-family:inherit;background:#fff;color:var(--ink);box-sizing:border-box;}
+  .login-field select:focus,.login-field input:focus{outline:2px solid var(--gold);border-color:transparent;}
+  .login-error{font-size:12.5px;color:var(--red-text);margin:-6px 0 12px;min-height:1em;}
+  .login-note{margin-top:16px;font-size:11.5px;color:var(--ink-mute);background:var(--cream-2);border-radius:10px;padding:10px 12px;line-height:1.5;}
+  .role-badge{display:inline-flex;align-items:center;gap:6px;background:var(--green-soft);color:var(--green-text);font-size:12px;font-weight:700;border-radius:999px;padding:6px 12px;}
+  .role-badge button{border:none;background:transparent;color:var(--green-text);font-weight:700;cursor:pointer;text-decoration:underline;font-size:12px;padding:0;margin-left:4px;}
+
+  /* ================= FILTER BAR ================= */
+  .filter-bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;background:#fff;border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin-bottom:18px;}
+  .filter-bar .f-label{font-size:12px;font-weight:700;color:var(--ink-mute);margin-right:2px;}
+  .filter-chip{border:1.5px solid var(--line);background:#fff;border-radius:999px;padding:7px 13px;font-size:12.5px;font-weight:700;color:var(--ink);cursor:pointer;}
+  .filter-chip.sel{border-color:var(--gold);background:var(--gold);color:var(--dark);}
+  .filter-bar input[type=date]{border:1.5px solid var(--line);border-radius:8px;padding:6px 8px;font-size:12.5px;font-family:inherit;color:var(--ink);}
+
+  /* ================= FLAG ITEM extras ================= */
+  .flag-item.resolved{border-left-color:var(--line);background:var(--cream-2);opacity:.72;}
+  .flag-item.resolved .flag-top{color:var(--ink-mute);}
+  .flag-item.resolved .flag-text{color:var(--ink-mute);}
+  .flag-actions{margin-top:8px;display:flex;justify-content:flex-end;}
+  .btn-resolve{border:1.5px solid var(--dark);background:#fff;color:var(--dark);border-radius:8px;padding:6px 12px;font-size:11.5px;font-weight:700;cursor:pointer;}
+  .btn-resolve[disabled]{border-color:var(--line);color:var(--ink-mute);cursor:default;}
+  .btn-resolve.done{border-color:var(--line);color:var(--ink-mute);}
+
+  /* ================= SETUP / CONFIG WARNING ================= */
+  .setup-warning{
+    max-width:640px;margin:60px auto;background:#fff;border:1.5px solid var(--red-text);
+    border-radius:14px;padding:22px 24px;font-size:14px;line-height:1.6;color:var(--ink);
+  }
+  .setup-warning h2{color:var(--red-text);font-size:18px;margin-top:0;}
+  .setup-warning code{background:var(--cream-2);padding:2px 6px;border-radius:6px;font-size:13px;}
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <div class="topbar">
+    <div class="brand">
+      <div class="brand-mark"><img src="assets/logo.png" alt="Logo Việt Pháp"></div>
+      <div class="brand-text">
+        <b>Việt Pháp · Đo lường trải nghiệm</b>
+        <span id="brand-sub">Khảo sát trải nghiệm bệnh nhân — dữ liệu thời gian thực</span>
+      </div>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+      <div id="role-badge-slot"></div>
+      <div class="switcher">
+        <button id="btn-patient" class="active">Xem như bệnh nhân</button>
+        <button id="btn-dash">Xem như quản lý</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ PATIENT VIEW ============ -->
+  <div id="view-patient" class="view active">
+    <div class="phone-wrap">
+      <div class="phone">
+        <div class="phone-screen" id="screen">
+          <div class="notch"></div>
+          <!-- content injected by JS -->
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ DASHBOARD VIEW ============ -->
+  <div id="view-dash" class="view">
+
+    <div id="dash-login" class="login-wrap">
+      <div class="login-card">
+        <h3>Đăng nhập nội bộ</h3>
+        <p>Dành cho CEO và trưởng khoa/bộ phận. Dùng email và mật khẩu được cấp.</p>
+        <div class="login-field">
+          <label>Email</label>
+          <input type="email" id="login-email" autocomplete="username" placeholder="ten@vietphapclinic.vn">
+        </div>
+        <div class="login-field">
+          <label>Mật khẩu</label>
+          <input type="password" id="login-password" autocomplete="current-password" placeholder="Nhập mật khẩu">
+        </div>
+        <div class="login-error" id="login-error"></div>
+        <div class="btn-row">
+          <button class="btn btn-primary" id="login-submit" style="flex:1;">Đăng nhập</button>
+        </div>
+        <div class="login-note">Tài khoản do CEO cấp phát trong Supabase (Authentication &gt; Users). Nếu quên mật khẩu, CEO có thể đặt lại trực tiếp trong đó.</div>
+      </div>
+    </div>
+
+    <div id="dash-content" style="display:none;">
+    <div class="dash-head">
+      <div>
+        <h2>Bảng theo dõi trải nghiệm khách hàng</h2>
+        <p id="dash-scope-note">Dành cho CEO và trưởng khoa/bộ phận · cập nhật theo thời gian thực</p>
+      </div>
+      <div class="dash-actions">
+        <button class="btn-sm" id="btn-refresh">↻ Làm mới</button>
+        <button class="btn-sm" id="btn-export-referrals">⬇ Export CSV giới thiệu</button>
+      </div>
+    </div>
+
+    <div class="filter-bar" id="filter-bar">
+      <span class="f-label">Khoảng thời gian:</span>
+      <button class="filter-chip sel" data-range="today">Hôm nay</button>
+      <button class="filter-chip" data-range="7d">7 ngày</button>
+      <button class="filter-chip" data-range="30d">30 ngày</button>
+      <button class="filter-chip" data-range="all">Toàn bộ</button>
+      <button class="filter-chip" data-range="custom">Tùy chọn</button>
+      <span id="custom-range-fields" style="display:none;gap:6px;align-items:center;">
+        <input type="date" id="filter-from"> <span style="font-size:12px;color:var(--ink-mute);">đến</span> <input type="date" id="filter-to">
+        <button class="btn-sm" id="filter-apply-custom">Áp dụng</button>
+      </span>
+    </div>
+
+    <div class="kpi-grid">
+      <div class="kpi accent">
+        <div class="kpi-label">Điểm NPS</div>
+        <div class="kpi-value" id="kpi-nps">–</div>
+        <div class="kpi-sub" id="kpi-nps-sub">Chưa có dữ liệu</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">CSAT trung bình</div>
+        <div class="kpi-value" id="kpi-csat">–</div>
+        <div class="kpi-sub">Trên thang 5 điểm, mọi điểm chạm</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">Số phản hồi</div>
+        <div class="kpi-value" id="kpi-count">0</div>
+        <div class="kpi-sub">Tổng lượt khảo sát đã ghi nhận</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">Cần xử lý gấp</div>
+        <div class="kpi-value" id="kpi-flags">0</div>
+        <div class="kpi-sub">Phản hồi ≤ 2 sao chưa xử lý</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">Lượt giới thiệu</div>
+        <div class="kpi-value" id="kpi-referrals">0</div>
+        <div class="kpi-sub">Khách hàng để lại người quen</div>
+      </div>
+    </div>
+
+    <div class="grid-2">
+      <div class="panel">
+        <h3>Điểm hài lòng theo điểm chạm (CSAT)</h3>
+        <div id="touchpoint-bars"></div>
+      </div>
+      <div class="panel">
+        <h3>Theo khoa khám</h3>
+        <table class="dept">
+          <thead><tr><th>Khoa</th><th style="text-align:right;">CSAT TB</th><th style="text-align:right;">Lượt</th></tr></thead>
+          <tbody id="dept-table"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h3>Phản hồi cần chú ý (điểm thấp / có góp ý)</h3>
+      <div id="flag-list"></div>
+    </div>
+
+    <div class="panel">
+      <h3>Khách hàng được giới thiệu (cho đội CTV / chăm sóc khách hàng)</h3>
+      <div id="referral-list"></div>
+    </div>
+
+    <div class="footnote">
+      Luồng khảo sát: Lễ tân → Khám bệnh → Cận lâm sàng → Nhà thuốc. Mỗi khu vực có mã QR riêng (gắn tham số <code>?qr=</code>) để đối chiếu điểm bắt đầu khảo sát.
+    </div>
+    </div><!-- /dash-content -->
+  </div>
+
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
