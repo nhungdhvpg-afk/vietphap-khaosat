@@ -444,7 +444,14 @@ function renderPatient(){
         <h3>Cảm ơn bạn!</h3>
         <p>Phản hồi của bạn giúp Việt Pháp phục vụ tốt hơn mỗi ngày.</p>
       </div>
+      <div class="btn-row" style="margin-top:22px;">
+        <button class="btn btn-primary" id="restart-btn">Tạo đánh giá mới</button>
+      </div>
     `;
+    document.getElementById('restart-btn').onclick = ()=>{
+      current = { dept:null, scores:{}, nps:null, comment:'', referrals:[] };
+      step = 0; renderPatient();
+    };
     return;
   }
 }
