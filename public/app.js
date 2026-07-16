@@ -47,7 +47,7 @@ const ENTRY_POINT = ['letan','kham','canlamsang','nhathuoc'].includes(rawEntryPo
 let staffSession = null; // { role:'ceo' } hoặc { role:'department_head', department:'...' }
 let dashFilter = { range:'today', from:null, to:null };
 let dashEntries = []; // dữ liệu đã tải cho phạm vi lọc hiện tại
-let realtimeChannel = null;
+let pollTimer = null;
 
 let current = { dept:null, scores:{}, nps:null, comment:'', referrals:[] };
 let step = 0; // 0=dept, 1..4=touchpoints, 5=nps, 6=comment, 7=thanks
@@ -62,10 +62,15 @@ btnPatient.onclick = ()=>{
   btnPatient.classList.add('active'); btnDash.classList.remove('active');
   viewPatient.classList.add('active'); viewDash.classList.remove('active');
 };
-btnDash.onclick = ()=>{
+btnDash.onclick = async ()=>{
   btnDash.classList.add('active'); btnPatient.classList.remove('active');
   viewDash.classList.add('active'); viewPatient.classList.remove('active');
-  if(staffSession){ enterDashboard(); } else { renderLoginGate(); }
+  if(staffSession){
+    const ok = await refreshDashboard();
+    if(ok){ enterDashboard(); } else { staffSession = null; renderLoginGate(); }
+  } else {
+    renderLoginGate();
+  }
 };
 
 /* ---------------- Staff login (Supabase Auth) ---------------- */
@@ -90,10 +95,11 @@ document.getElementById('login-submit').onclick = async ()=>{
       errEl.textContent = 'Sai email hoặc mật khẩu. Vui lòng thử lại.';
       return;
     }
-    const ok = await loadStaffProfile();
+    const ok = await refreshDashboard();
     if(!ok){
       errEl.textContent = 'Tài khoản chưa được gán vai trò. Vui lòng liên hệ CEO để kiểm tra bảng staff_accounts.';
       await supabaseClient.auth.signOut();
+      staffSession = null;
       return;
     }
     enterDashboard();
@@ -106,22 +112,13 @@ document.getElementById('login-password').addEventListener('keydown', (e)=>{
   if(e.key === 'Enter') document.getElementById('login-submit').click();
 });
 
-async function loadStaffProfile(){
-  const { data: userData } = await supabaseClient.auth.getUser();
-  const user = userData && userData.user;
-  if(!user) return false;
-  const { data, error } = await supabaseClient
-    .from('staff_accounts')
-    .select('role, department')
-    .eq('id', user.id)
-    .maybeSingle();
-  if(error || !data) return false;
-  staffSession = { role: data.role, department: data.department };
-  return true;
+async function getAccessToken(){
+  const { data } = await supabaseClient.auth.getSession();
+  return data && data.session ? data.session.access_token : null;
 }
 
 async function logoutStaff(){
-  if(realtimeChannel){ supabaseClient.removeChannel(realtimeChannel); realtimeChannel = null; }
+  stopPolling();
   await supabaseClient.auth.signOut();
   staffSession = null;
   document.getElementById('role-badge-slot').innerHTML = '';
@@ -138,16 +135,18 @@ function enterDashboard(){
   document.getElementById('dash-scope-note').textContent = staffSession.role === 'ceo'
     ? 'Dành cho CEO · xem toàn bộ 7 khoa · cập nhật theo thời gian thực'
     : `Dành cho trưởng khoa ${staffSession.department} · chỉ hiển thị dữ liệu khoa này`;
-  refreshDashboard();
-  subscribeRealtime();
+  renderDashboard();
+  startPolling();
 }
 
-function subscribeRealtime(){
-  if(realtimeChannel) return;
-  realtimeChannel = supabaseClient
-    .channel('dashboard-changes')
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'survey_responses' }, ()=>{ refreshDashboard(); })
-    .subscribe();
+// Không dùng Supabase Realtime (đường dữ liệu anon/authenticated hiện không ổn định) —
+// thay bằng tự làm mới định kỳ để dashboard vẫn cập nhật gần thời gian thực.
+function startPolling(){
+  stopPolling();
+  pollTimer = setInterval(()=>{ refreshDashboard(); }, 20000);
+}
+function stopPolling(){
+  if(pollTimer){ clearInterval(pollTimer); pollTimer = null; }
 }
 
 document.getElementById('btn-refresh').onclick = ()=> refreshDashboard();
@@ -190,25 +189,37 @@ function filterRangeBounds(){
   return { from: null, to: null }; // 'all'
 }
 
-/* ---------------- Load scoped data from Supabase ---------------- */
+/* ---------------- Load scoped data qua API server (xem api/dashboard-data.js) ---------------- */
 async function refreshDashboard(){
-  if(!staffSession) return;
-  const { from, to } = filterRangeBounds();
-  let query = supabaseClient
-    .from('survey_responses')
-    .select('*, referrals(*)')
-    .order('created_at', { ascending: false })
-    .limit(5000);
-  if(from) query = query.gte('created_at', from);
-  if(to) query = query.lte('created_at', to);
+  const token = await getAccessToken();
+  if(!token) return false;
 
-  const { data, error } = await query;
-  if(error){
-    console.error('Lỗi tải dữ liệu dashboard', error);
-    return;
+  const { from, to } = filterRangeBounds();
+  const params = new URLSearchParams();
+  if(from) params.set('from', from);
+  if(to) params.set('to', to);
+
+  let res;
+  try{
+    res = await fetch(`/api/dashboard-data?${params.toString()}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+  }catch(e){
+    console.error('Lỗi kết nối tới máy chủ', e);
+    return staffSession ? true : false;
   }
-  // RLS đã tự giới hạn theo khoa cho trưởng khoa; CEO thấy toàn bộ.
-  dashEntries = (data || []).map(row => ({
+
+  if(res.status === 401){
+    return false;
+  }
+  if(!res.ok){
+    console.error('Lỗi tải dữ liệu dashboard', await res.text().catch(()=>''));
+    return staffSession ? true : false;
+  }
+
+  const body = await res.json();
+  staffSession = { role: body.staff.role, department: body.staff.department };
+  dashEntries = (body.data || []).map(row => ({
     id: row.id,
     ts: row.created_at,
     dept: row.department,
@@ -226,6 +237,7 @@ async function refreshDashboard(){
     resolvedBy: row.resolved_by,
   }));
   renderDashboard();
+  return true;
 }
 
 /* ---------------- CSV export ---------------- */
@@ -251,21 +263,26 @@ document.getElementById('btn-export-referrals').onclick = ()=>{
   URL.revokeObjectURL(url);
 };
 
-/* ---------------- Resolve flag ---------------- */
+/* ---------------- Resolve flag qua API server (xem api/resolve-flag.js) ---------------- */
 async function toggleResolved(id){
   const e = dashEntries.find(x=>x.id===id);
   if(!e) return;
+  const token = await getAccessToken();
+  if(!token) return;
   const nextResolved = !e.resolved;
-  const resolvedBy = nextResolved ? (staffSession.role==='ceo' ? 'CEO' : `Trưởng khoa ${staffSession.department}`) : null;
-  const { error } = await supabaseClient
-    .from('survey_responses')
-    .update({
-      resolved: nextResolved,
-      resolved_by: resolvedBy,
-      resolved_at: nextResolved ? new Date().toISOString() : null,
-    })
-    .eq('id', id);
-  if(error){ alert('Không cập nhật được, vui lòng thử lại.'); return; }
+
+  let res;
+  try{
+    res = await fetch('/api/resolve-flag', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ id, resolved: nextResolved }),
+    });
+  }catch(err){
+    alert('Không cập nhật được, vui lòng kiểm tra kết nối mạng và thử lại.');
+    return;
+  }
+  if(!res.ok){ alert('Không cập nhật được, vui lòng thử lại.'); return; }
   await refreshDashboard();
 }
 
@@ -434,31 +451,19 @@ function renderPatient(){
 
 async function submitEntry(){
   try{
-    const { data: inserted, error: insertError } = await supabaseClient
-      .from('survey_responses')
-      .insert({
+    const res = await fetch('/api/submit-survey', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
         department: current.dept,
-        entry_point: ENTRY_POINT,
-        score_letan: current.scores.letan,
-        score_kham: current.scores.kham,
-        score_canlamsang: current.scores.canlamsang,
-        score_nhathuoc: current.scores.nhathuoc,
+        entryPoint: ENTRY_POINT,
+        scores: current.scores,
         nps: current.nps,
         comment: current.comment || null,
-      })
-      .select('id')
-      .single();
-
-    if(insertError) throw insertError;
-
-    const referralRows = (current.referrals || [])
-      .filter(r => r.name || r.phone)
-      .map(r => ({ survey_response_id: inserted.id, name: r.name || null, phone: r.phone || null }));
-
-    if(referralRows.length){
-      const { error: refError } = await supabaseClient.from('referrals').insert(referralRows);
-      if(refError) throw refError;
-    }
+        referrals: current.referrals || [],
+      }),
+    });
+    if(!res.ok) throw new Error('submit failed: ' + res.status);
     return true;
   }catch(e){
     console.error('Lỗi gửi khảo sát', e);
@@ -594,9 +599,11 @@ supabaseClient.auth.onAuthStateChange((event)=>{
 (async function initSession(){
   const { data } = await supabaseClient.auth.getSession();
   if(data && data.session){
-    const ok = await loadStaffProfile();
+    const ok = await refreshDashboard();
     if(ok && viewDash.classList.contains('active')){
       enterDashboard();
+    } else if(!ok){
+      staffSession = null;
     }
   }
 })();
