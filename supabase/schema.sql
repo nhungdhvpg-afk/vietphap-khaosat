@@ -56,8 +56,9 @@ create table if not exists survey_responses (
   entry_point       text check (entry_point is null or entry_point in ('letan', 'kham', 'canlamsang', 'nhathuoc')),
   score_letan       smallint not null check (score_letan between 1 and 5),
   score_kham        smallint not null check (score_kham between 1 and 5),
-  score_canlamsang  smallint not null check (score_canlamsang between 1 and 5),
-  score_nhathuoc    smallint not null check (score_nhathuoc between 1 and 5),
+  -- null = bệnh nhân không sử dụng dịch vụ này (chỉ Cận lâm sàng và Nhà thuốc cho phép)
+  score_canlamsang  smallint check (score_canlamsang is null or score_canlamsang between 1 and 5),
+  score_nhathuoc    smallint check (score_nhathuoc is null or score_nhathuoc between 1 and 5),
   nps               smallint not null check (nps between 0 and 10),
   comment           text,
   resolved          boolean not null default false,

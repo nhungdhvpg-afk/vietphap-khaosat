@@ -6,6 +6,11 @@ const ENTRY_POINTS = ['letan', 'kham', 'canlamsang', 'nhathuoc'];
 function isValidScore(v) {
   return Number.isInteger(v) && v >= 1 && v <= 5;
 }
+// Cận lâm sàng và Nhà thuốc cho phép "không sử dụng dịch vụ" (null); Lễ tân và Khám bệnh luôn bắt buộc.
+function isValidScoreOrNA(v, allowNA) {
+  if (allowNA && (v === null || v === undefined)) return true;
+  return isValidScore(v);
+}
 
 module.exports = async (req, res) => {
   if (req.method !== 'POST') {
@@ -26,7 +31,12 @@ module.exports = async (req, res) => {
       return;
     }
     const s = scores || {};
-    if (![s.letan, s.kham, s.canlamsang, s.nhathuoc].every(isValidScore)) {
+    const scoresValid =
+      isValidScore(s.letan) &&
+      isValidScore(s.kham) &&
+      isValidScoreOrNA(s.canlamsang, true) &&
+      isValidScoreOrNA(s.nhathuoc, true);
+    if (!scoresValid) {
       res.status(400).json({ error: 'Điểm đánh giá không hợp lệ' });
       return;
     }

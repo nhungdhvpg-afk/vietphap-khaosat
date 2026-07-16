@@ -24,10 +24,10 @@ const supabaseClient = window.supabase.createClient(
 
 /* ---------------- Data model ---------------- */
 const TOUCHPOINTS = [
-  {id:'letan', field:'score_letan', label:'Lễ tân', note:null},
-  {id:'kham', field:'score_kham', label:'Khám bệnh', note:null},
-  {id:'canlamsang', field:'score_canlamsang', label:'Cận lâm sàng', note:'Xét nghiệm, X-quang'},
-  {id:'nhathuoc', field:'score_nhathuoc', label:'Nhà thuốc', note:null},
+  {id:'letan', field:'score_letan', label:'Lễ tân', note:null, allowNA:false},
+  {id:'kham', field:'score_kham', label:'Khám bệnh', note:null, allowNA:false},
+  {id:'canlamsang', field:'score_canlamsang', label:'Cận lâm sàng', note:'Xét nghiệm, X-quang', allowNA:true},
+  {id:'nhathuoc', field:'score_nhathuoc', label:'Nhà thuốc', note:null, allowNA:true},
 ];
 const DEPARTMENTS = ['Nội','QL bệnh Huyết áp - Tiểu đường','Y học cổ truyền','Sản','Nhi','Ngoại','Cấp cứu'];
 const FACES = ['😞','🙁','😐','🙂','😄'];
@@ -351,32 +351,47 @@ function renderPatient(){
     const tp = TOUCHPOINTS[step-1];
     const label = touchpointLabel(tp, current.dept);
     const noteHtml = tp.note ? `<b style="color:var(--ink);">${tp.note}.</b> ` : '';
+    const existingScore = current.scores[tp.id];
+    const naHtml = tp.allowNA
+      ? `<div class="na-link${existingScore===null?' sel':''}" id="na-link">Không sử dụng dịch vụ này</div>`
+      : '';
     screen.innerHTML = `
       ${dots(6,step)}
       <div class="step-title">Bạn có hài lòng với<br>${label} không?</div>
       <div class="step-sub">${noteHtml}Chạm vào biểu tượng phù hợp nhất.</div>
       <div class="face-row" id="face-row">
         ${FACES.map((f,i)=>`
-          <div class="face-item" data-v="${i+1}">
-            <div class="face-btn">${f}</div>
+          <div class="face-item${existingScore===i+1?' sel':''}" data-v="${i+1}">
+            <div class="face-btn${existingScore===i+1?' sel':''}">${f}</div>
             <div class="face-item-label">${FACE_LABELS[i]}</div>
           </div>
         `).join('')}
       </div>
+      ${naHtml}
       <div class="btn-row">
         <button class="btn btn-ghost" id="back-btn">Quay lại</button>
-        <button class="btn btn-primary" id="next-btn" disabled>Tiếp tục</button>
+        <button class="btn btn-primary" id="next-btn" ${existingScore===undefined?'disabled':''}>Tiếp tục</button>
       </div>
     `;
     document.querySelectorAll('#face-row .face-item').forEach(item=>{
       item.onclick = ()=>{
         document.querySelectorAll('#face-row .face-item').forEach(x=>{ x.classList.remove('sel'); x.querySelector('.face-btn').classList.remove('sel'); });
+        const naLink = document.getElementById('na-link');
+        if(naLink) naLink.classList.remove('sel');
         item.classList.add('sel');
         item.querySelector('.face-btn').classList.add('sel');
         current.scores[tp.id] = parseInt(item.dataset.v);
         document.getElementById('next-btn').disabled = false;
       };
     });
+    if(tp.allowNA){
+      document.getElementById('na-link').onclick = ()=>{
+        document.querySelectorAll('#face-row .face-item').forEach(x=>{ x.classList.remove('sel'); x.querySelector('.face-btn').classList.remove('sel'); });
+        document.getElementById('na-link').classList.add('sel');
+        current.scores[tp.id] = null;
+        document.getElementById('next-btn').disabled = false;
+      };
+    }
     document.getElementById('back-btn').onclick = ()=>{ step-=1; renderPatient(); };
     document.getElementById('next-btn').onclick = ()=>{ step+=1; renderPatient(); };
     return;
@@ -530,9 +545,9 @@ function renderDashboard(){
   const csatAvg = avg(allScores);
   document.getElementById('kpi-csat').textContent = csatAvg ? csatAvg.toFixed(1) : '–';
 
-  // Flags: score <=2 in any touchpoint or nps<=6 with comment
+  // Flags: score <=2 in any touchpoint (bỏ qua điểm chạm "không sử dụng dịch vụ") hoặc nps<=6 kèm góp ý
   const flags = scoped.filter(e=>{
-    const low = Object.values(e.scores||{}).some(v=>v<=2);
+    const low = Object.values(e.scores||{}).some(v=>v!==null && v!==undefined && v<=2);
     return low || (e.nps!==null && e.nps<=6 && e.comment);
   }).sort((a,b)=> new Date(b.ts)-new Date(a.ts));
   const activeFlags = flags.filter(e=>!e.resolved);
@@ -582,7 +597,7 @@ function renderDashboard(){
     ? orderedFlags.slice(0,12).map(e=>{
         const d = new Date(e.ts);
         const time = d.toLocaleString('vi-VN', {hour:'2-digit',minute:'2-digit',day:'2-digit',month:'2-digit'});
-        const lowTp = TOUCHPOINTS.filter(tp=>e.scores && e.scores[tp.id]<=2).map(tp=>tp.label);
+        const lowTp = TOUCHPOINTS.filter(tp=>e.scores && e.scores[tp.id]!==null && e.scores[tp.id]!==undefined && e.scores[tp.id]<=2).map(tp=>tp.label);
         const entryPointLabel = e.entryPoint ? ` · quét QR: ${e.entryPoint}` : '';
         return `
           <div class="flag-item ${e.resolved?'resolved':''}">
