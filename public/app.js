@@ -34,9 +34,17 @@ const FACES = ['😞','🙁','😐','🙂','😄'];
 const FACE_LABELS = ['Rất tệ','Không hài lòng','Bình thường','Hài lòng','Rất hài lòng'];
 
 // Nhãn điểm chạm có thể thay đổi theo khoa khám (riêng Khám bệnh, khoa YHCT gọi là Khám và Điều trị bệnh)
-function touchpointLabel(tp, dept){
-  if(tp.id === 'kham' && dept === 'Y học cổ truyền') return 'Khám và Điều trị bệnh';
-  return tp.label;
+// Câu hỏi hiển thị cho từng điểm chạm — tên bộ phận/vai trò được viết hoa,
+// tô màu nổi bật để bệnh nhân dễ chú ý khi làm khảo sát.
+function touchpointQuestionHtml(tp, dept){
+  if(tp.id === 'letan') return `Đánh giá bộ phận <span class="tp-highlight">ĐÓN TIẾP</span>`;
+  if(tp.id === 'kham'){
+    const suffix = dept === 'Y học cổ truyền' ? ' bệnh' : '';
+    return `Đánh giá <span class="tp-highlight">BÁC SĨ</span> khám &amp; điều trị${suffix}`;
+  }
+  if(tp.id === 'canlamsang') return `Đánh giá bộ phận <span class="tp-highlight">SIÊU ÂM/XÉT NGHIỆM/X-QUANG</span>`;
+  if(tp.id === 'nhathuoc') return `Đánh giá bộ phận <span class="tp-highlight">NHÀ THUỐC</span>`;
+  return '';
 }
 
 // entry_point: đọc từ URL (?qr=letan|kham|canlamsang|nhathuoc) — chỉ dùng để phân tích, không đổi luồng 7 bước
@@ -379,16 +387,15 @@ function renderPatient(){
 
   if(step>=1 && step<=4){
     const tp = TOUCHPOINTS[step-1];
-    const label = touchpointLabel(tp, current.dept);
-    const noteHtml = tp.note ? `<b style="color:var(--ink);">${tp.note}.</b> ` : '';
+    const questionHtml = touchpointQuestionHtml(tp, current.dept);
     const existingScore = current.scores[tp.id];
     const naHtml = tp.allowNA
       ? `<div class="na-link${existingScore===null?' sel':''}" id="na-link">Không sử dụng dịch vụ này</div>`
       : '';
     screen.innerHTML = `
       ${dots(6,step)}
-      <div class="step-title">Bạn có hài lòng với<br>${label} không?</div>
-      <div class="step-sub">${noteHtml}Chạm vào biểu tượng phù hợp nhất.</div>
+      <div class="step-title">${questionHtml}</div>
+      <div class="step-sub">Chạm vào biểu tượng phù hợp nhất.</div>
       <div class="face-row" id="face-row">
         ${FACES.map((f,i)=>`
           <div class="face-item${existingScore===i+1?' sel':''}" data-v="${i+1}">
