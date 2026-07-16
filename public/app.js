@@ -286,6 +286,27 @@ async function toggleResolved(id){
   await refreshDashboard();
 }
 
+/* ---------------- Xoá phản hồi (chỉ CEO) qua API server (xem api/delete-response.js) ---------------- */
+async function deleteResponse(id){
+  if(!confirm('Xoá vĩnh viễn phản hồi này? Hành động này không thể hoàn tác.')) return;
+  const token = await getAccessToken();
+  if(!token) return;
+
+  let res;
+  try{
+    res = await fetch('/api/delete-response', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ id }),
+    });
+  }catch(err){
+    alert('Không xoá được, vui lòng kiểm tra kết nối mạng và thử lại.');
+    return;
+  }
+  if(!res.ok){ alert('Không xoá được, vui lòng thử lại.'); return; }
+  await refreshDashboard();
+}
+
 /* ---------------- Patient flow rendering ---------------- */
 const screen = document.getElementById('screen');
 
@@ -586,6 +607,30 @@ function renderDashboard(){
         ${referrals.map(r=>`<tr><td>${escapeHtml(r.name||'–')}</td><td>${escapeHtml(r.phone||'–')}</td><td class="num">${r.dept||'–'}</td></tr>`).join('')}
       </tbody></table>`
     : '<div class="empty-state">Chưa có lượt giới thiệu nào trong khoảng thời gian đã chọn</div>';
+
+  // Bảng quản lý dữ liệu — chỉ CEO thấy, dùng để xoá dữ liệu test/nhầm
+  const adminPanel = document.getElementById('admin-panel');
+  if(staffSession.role === 'ceo'){
+    adminPanel.style.display = 'block';
+    const sorted = [...scoped].sort((a,b)=> new Date(b.ts)-new Date(a.ts));
+    document.getElementById('admin-response-list').innerHTML = sorted.length
+      ? sorted.slice(0,50).map(e=>{
+          const d = new Date(e.ts);
+          const time = d.toLocaleString('vi-VN', {hour:'2-digit',minute:'2-digit',day:'2-digit',month:'2-digit'});
+          return `
+            <div class="admin-row">
+              <div class="admin-row-info"><b>${e.dept||'Không rõ khoa'}</b> · ${time} <span>· NPS ${e.nps!==null&&e.nps!==undefined?e.nps:'–'}</span></div>
+              <button class="btn-delete" data-id="${e.id}">Xoá</button>
+            </div>
+          `;
+        }).join('') + (sorted.length>50 ? `<div class="empty-state">Chỉ hiện 50 dòng mới nhất trong khoảng thời gian đã lọc</div>` : '')
+      : '<div class="empty-state">Chưa có dữ liệu trong khoảng thời gian đã chọn</div>';
+    document.querySelectorAll('.btn-delete').forEach(btn=>{
+      btn.onclick = ()=> deleteResponse(btn.dataset.id);
+    });
+  } else {
+    adminPanel.style.display = 'none';
+  }
 }
 
 function escapeHtml(s){

@@ -262,6 +262,20 @@
   .btn-resolve[disabled]{border-color:var(--line);color:var(--ink-mute);cursor:default;}
   .btn-resolve.done{border-color:var(--line);color:var(--ink-mute);}
 
+  /* ================= ADMIN (xoá dữ liệu) ================= */
+  .admin-row{
+    display:flex;justify-content:space-between;align-items:center;gap:10px;
+    padding:9px 0;border-bottom:1px solid var(--line);font-size:12.5px;
+  }
+  .admin-row-info{color:var(--ink);}
+  .admin-row-info b{color:var(--dark);}
+  .admin-row-info span{color:var(--ink-mute);}
+  .btn-delete{
+    border:1.5px solid #E0B4AE;background:#fff;color:var(--red-text);border-radius:8px;
+    padding:6px 12px;font-size:11.5px;font-weight:700;cursor:pointer;flex:none;
+  }
+  .btn-delete:disabled{opacity:.5;cursor:default;}
+
   /* ================= SETUP / CONFIG WARNING ================= */
   .setup-warning{
     max-width:640px;margin:60px auto;background:#fff;border:1.5px solid var(--red-text);
@@ -401,6 +415,11 @@
     <div class="panel">
       <h3>Khách hàng được giới thiệu (cho đội CTV / chăm sóc khách hàng)</h3>
       <div id="referral-list"></div>
+    </div>
+
+    <div class="panel" id="admin-panel" style="display:none;">
+      <h3>Quản lý dữ liệu (chỉ CEO) — dùng để xoá dữ liệu test/nhầm</h3>
+      <div id="admin-response-list"></div>
     </div>
 
     <div class="footnote">
