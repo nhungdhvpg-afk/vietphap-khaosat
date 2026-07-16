@@ -307,6 +307,36 @@ async function deleteResponse(id){
   await refreshDashboard();
 }
 
+/* ---------------- Xoá toàn bộ dữ liệu theo khoảng đang lọc (chỉ CEO) ---------------- */
+const RANGE_LABELS = { today:'Hôm nay', '7d':'7 ngày qua', '30d':'30 ngày qua', all:'TOÀN BỘ dữ liệu', custom:'khoảng ngày đã chọn' };
+
+document.getElementById('btn-delete-all').onclick = async ()=>{
+  const rangeLabel = RANGE_LABELS[dashFilter.range] || dashFilter.range;
+  const typed = prompt(`Sắp xoá VĨNH VIỄN dữ liệu trong khoảng: ${rangeLabel} (đang chọn ở thanh lọc phía trên).\n\nHành động này không thể hoàn tác. Để xác nhận, gõ đúng chữ XOA (viết hoa, không dấu) rồi bấm OK:`);
+  if(typed === null) return;
+  if(typed.trim() !== 'XOA'){ alert('Đã huỷ — chữ xác nhận không đúng.'); return; }
+
+  const token = await getAccessToken();
+  if(!token) return;
+  const { from, to } = filterRangeBounds();
+
+  let res;
+  try{
+    res = await fetch('/api/delete-all-responses', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ from, to }),
+    });
+  }catch(err){
+    alert('Không xoá được, vui lòng kiểm tra kết nối mạng và thử lại.');
+    return;
+  }
+  if(!res.ok){ alert('Không xoá được, vui lòng thử lại.'); return; }
+  const body = await res.json();
+  alert(`Đã xoá ${body.deleted} phản hồi.`);
+  await refreshDashboard();
+};
+
 /* ---------------- Patient flow rendering ---------------- */
 const screen = document.getElementById('screen');
 
