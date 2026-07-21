@@ -30,6 +30,8 @@ const TOUCHPOINTS = [
   {id:'nhathuoc', field:'score_nhathuoc', label:'Nhà thuốc', note:null, allowNA:true},
 ];
 const DEPARTMENTS = ['Nội','QL bệnh Huyết áp - Tiểu đường','Y học cổ truyền','Sản','Nhi','Ngoại','Cấp cứu'];
+const MAX_REFERRALS = 2;
+const REFERRAL_SLOTS = Array.from({length: MAX_REFERRALS}, (_, i) => i + 1);
 // Hiển thị từ Rất hài lòng (trái) đến Rất tệ (phải); điểm lưu vào hệ thống vẫn theo
 // FACE_SCORES tương ứng để không đổi ý nghĩa 1=Rất tệ...5=Rất hài lòng ở các chỗ khác (KPI, cảnh báo...).
 const FACES = ['😄','🙂','😐','🙁','😞'];
@@ -465,7 +467,7 @@ function renderPatient(){
   }
 
   if(step === 6){
-    const refRowsHtml = [1,2,3,4].map(i => `
+    const refRowsHtml = REFERRAL_SLOTS.map(i => `
       <div class="ref-row">
         <div class="ref-row-label">Người giới thiệu ${i} <span>(không bắt buộc)</span></div>
         <div class="ref-row-fields">
@@ -482,7 +484,7 @@ function renderPatient(){
       <textarea class="comment" id="comment-box" placeholder="Ví dụ: phòng chờ hơi đông, mong có thêm ghế ngồi..."></textarea>
 
       <div class="step-sub" style="margin-bottom:12px;font-weight:700;color:var(--dark);font-size:17px;">
-        Giới thiệu Việt Pháp cho người thân, bạn bè? <span style="font-weight:400;color:var(--ink-mute);">(tối đa 4 người)</span>
+        Giới thiệu Việt Pháp cho người thân, bạn bè? <span style="font-weight:400;color:var(--ink-mute);">(tối đa ${MAX_REFERRALS} người)</span>
       </div>
       <div id="ref-rows">${refRowsHtml}</div>
 
@@ -496,7 +498,7 @@ function renderPatient(){
     document.getElementById('back-btn').onclick = ()=>{ step=5; renderPatient(); };
     document.getElementById('submit-btn').onclick = async ()=>{
       current.comment = document.getElementById('comment-box').value.trim();
-      current.referrals = [1,2,3,4].map(i=>({
+      current.referrals = REFERRAL_SLOTS.map(i=>({
         name: document.getElementById(`ref-name-${i}`).value.trim(),
         phone: document.getElementById(`ref-phone-${i}`).value.trim()
       })).filter(r=>r.name || r.phone);
@@ -593,7 +595,7 @@ function renderDashboard(){
   const activeFlags = flags.filter(e=>!e.resolved);
   document.getElementById('kpi-flags').textContent = activeFlags.length;
 
-  // Referrals (mỗi lượt khảo sát có thể giới thiệu tối đa 4 người)
+  // Referrals (mỗi lượt khảo sát có thể giới thiệu tối đa MAX_REFERRALS người)
   const referrals = [];
   scoped.forEach(e=>{
     (e.referrals||[]).forEach(r=>{

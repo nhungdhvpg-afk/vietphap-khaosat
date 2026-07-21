@@ -72,7 +72,7 @@ create index if not exists idx_survey_responses_resolved on survey_responses (re
 
 -- ----------------------------------------------------------------------------
 -- 3. BẢNG NGƯỜI ĐƯỢC GIỚI THIỆU (referrals)
---    Tối đa 4 dòng cho mỗi survey_response (ứng dụng tự giới hạn ở phía giao diện)
+--    Tối đa 2 dòng cho mỗi survey_response (ứng dụng tự giới hạn ở phía giao diện)
 -- ----------------------------------------------------------------------------
 create table if not exists referrals (
   id                  uuid primary key default gen_random_uuid(),

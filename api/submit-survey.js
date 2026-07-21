@@ -2,6 +2,7 @@ const { getSupabaseAdmin } = require('./_lib/supabaseAdmin');
 
 const DEPARTMENTS = ['Nội', 'QL bệnh Huyết áp - Tiểu đường', 'Y học cổ truyền', 'Sản', 'Nhi', 'Ngoại', 'Cấp cứu'];
 const ENTRY_POINTS = ['letan', 'kham', 'canlamsang', 'nhathuoc'];
+const MAX_REFERRALS = 2;
 
 function isValidScore(v) {
   return Number.isInteger(v) && v >= 1 && v <= 5;
@@ -65,7 +66,7 @@ module.exports = async (req, res) => {
 
     const referralRows = (Array.isArray(referrals) ? referrals : [])
       .filter((r) => r && (r.name || r.phone))
-      .slice(0, 4)
+      .slice(0, MAX_REFERRALS)
       .map((r) => ({
         survey_response_id: inserted.id,
         name: (r.name || '').slice(0, 200) || null,
