@@ -30,8 +30,11 @@ const TOUCHPOINTS = [
   {id:'nhathuoc', field:'score_nhathuoc', label:'Nhà thuốc', note:null, allowNA:true},
 ];
 const DEPARTMENTS = ['Nội','QL bệnh Huyết áp - Tiểu đường','Y học cổ truyền','Sản','Nhi','Ngoại','Cấp cứu'];
-const FACES = ['😞','🙁','😐','🙂','😄'];
-const FACE_LABELS = ['Rất tệ','Không hài lòng','Bình thường','Hài lòng','Rất hài lòng'];
+// Hiển thị từ Rất hài lòng (trái) đến Rất tệ (phải); điểm lưu vào hệ thống vẫn theo
+// FACE_SCORES tương ứng để không đổi ý nghĩa 1=Rất tệ...5=Rất hài lòng ở các chỗ khác (KPI, cảnh báo...).
+const FACES = ['😄','🙂','😐','🙁','😞'];
+const FACE_LABELS = ['Rất hài lòng','Hài lòng','Bình thường','Không hài lòng','Rất tệ'];
+const FACE_SCORES = [5,4,3,2,1];
 
 // Nhãn điểm chạm có thể thay đổi theo khoa khám (riêng Khám bệnh, khoa YHCT gọi là Khám và Điều trị bệnh)
 // Câu hỏi hiển thị cho từng điểm chạm — tên bộ phận/vai trò được viết hoa,
@@ -398,8 +401,8 @@ function renderPatient(){
       <div class="step-sub">Chạm vào biểu tượng phù hợp nhất.</div>
       <div class="face-row" id="face-row">
         ${FACES.map((f,i)=>`
-          <div class="face-item${existingScore===i+1?' sel':''}" data-v="${i+1}">
-            <div class="face-btn${existingScore===i+1?' sel':''}">${f}</div>
+          <div class="face-item${existingScore===FACE_SCORES[i]?' sel':''}" data-v="${FACE_SCORES[i]}">
+            <div class="face-btn${existingScore===FACE_SCORES[i]?' sel':''}">${f}</div>
             <div class="face-item-label">${FACE_LABELS[i]}</div>
           </div>
         `).join('')}
