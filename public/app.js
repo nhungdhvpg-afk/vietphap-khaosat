@@ -440,22 +440,23 @@ function renderPatient(){
   }
 
   if(step === 5){
+    const existingNps = current.nps;
     screen.innerHTML = `
       ${dots(6,5)}
       <div class="step-title">Bạn có sẵn lòng giới thiệu<br>Việt Pháp cho người thân?</div>
-      <div class="step-sub">0 = Chắc chắn không · 10 = Chắc chắn có</div>
-      <div class="nps-row" id="nps-row">
-        ${Array.from({length:11},(_,i)=>`<div class="nps-btn" data-v="${i}">${i}</div>`).join('')}
+      <div class="step-sub">Chọn câu trả lời phù hợp.</div>
+      <div class="yesno-row" id="yesno-row">
+        <button class="yesno-btn${existingNps===10?' sel':''}" data-v="10">Có</button>
+        <button class="yesno-btn${existingNps===0?' sel':''}" data-v="0">Không</button>
       </div>
-      <div class="nps-scale-labels"><span>0</span><span>10</span></div>
       <div class="btn-row">
         <button class="btn btn-ghost" id="back-btn">Quay lại</button>
-        <button class="btn btn-primary" id="next-btn" disabled>Tiếp tục</button>
+        <button class="btn btn-primary" id="next-btn" ${existingNps===null||existingNps===undefined?'disabled':''}>Tiếp tục</button>
       </div>
     `;
-    document.querySelectorAll('#nps-row .nps-btn').forEach(b=>{
+    document.querySelectorAll('#yesno-row .yesno-btn').forEach(b=>{
       b.onclick = ()=>{
-        document.querySelectorAll('#nps-row .nps-btn').forEach(x=>x.classList.remove('sel'));
+        document.querySelectorAll('#yesno-row .yesno-btn').forEach(x=>x.classList.remove('sel'));
         b.classList.add('sel');
         current.nps = parseInt(b.dataset.v);
         document.getElementById('next-btn').disabled = false;
