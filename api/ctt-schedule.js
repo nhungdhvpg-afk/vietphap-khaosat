@@ -36,7 +36,7 @@ module.exports = async (req, res) => {
       .eq('date', date);
     if (schedulesError) throw schedulesError;
 
-    const { raw } = await loadCttConfig();
+    const { raw, duplicateStaffNames } = await loadCttConfig();
     const procById = Object.fromEntries(raw.procedures.map((p) => [p.id, p]));
     const staffById = Object.fromEntries(raw.staff.map((s) => [s.id, s]));
     const machineById = Object.fromEntries(raw.machines.map((m) => [m.id, m]));
@@ -109,7 +109,7 @@ module.exports = async (req, res) => {
     });
     const summary = { totalPatients, completedPatients: totalPatients - incompletePatients, incompletePatients, comboCount, procedureCount, machineUtilization };
 
-    res.status(200).json({ date, patients, scheduleEntries, warnings, summary });
+    res.status(200).json({ date, patients, scheduleEntries, warnings, summary, duplicateStaffNames });
   } catch (e) {
     console.error('ctt-schedule error', e);
     res.status(500).json({ error: 'Không tải được lịch.' });

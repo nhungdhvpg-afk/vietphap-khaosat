@@ -210,6 +210,14 @@ function renderResults(containerSel, result) {
 
   let html = '';
 
+  if ((result.duplicateStaffNames || []).length > 0) {
+    html += `<div class="panel" style="border:2px solid #d33;"><h3>⚠ Trùng tên nhân sự</h3>
+      <p>Có <b>2 người khác nhau đang hoạt động</b> lại trùng tên hiển thị: <b>${result.duplicateStaffNames.map(escapeHtml).join(', ')}</b>.
+      Thuật toán vẫn xếp đúng cho từng người (không xung đột thật), NHƯNG báo cáo dưới đây sẽ hiển thị như thể 1 người bị xếp trùng giờ, dễ gây hiểu nhầm là lỗi chia lịch.
+      Vào <b>Cài đặt → Nhân sự</b> đổi tên phân biệt (VD thêm số/chữ lót) cho những người trùng tên này.</p>
+    </div>`;
+  }
+
   if (summary) {
     html += `<div class="panel"><h3>Tổng quan</h3><div class="kpi-grid">
       <div class="kpi"><div class="v">${summary.totalPatients}</div><div class="l">Tổng bệnh nhân</div></div>

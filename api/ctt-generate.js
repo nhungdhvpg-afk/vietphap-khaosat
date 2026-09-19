@@ -46,7 +46,7 @@ module.exports = async (req, res) => {
     }
 
     const db = getSupabaseAdmin();
-    const { schedulerConfig } = await loadCttConfig();
+    const { schedulerConfig, duplicateStaffNames } = await loadCttConfig();
     if (schedulerConfig.staff.length === 0) {
       res.status(400).json({ error: 'Chưa có nhân sự nào đang hoạt động — vào Cài đặt để thêm nhân sự trước.' });
       return;
@@ -138,6 +138,7 @@ module.exports = async (req, res) => {
       warnings: result.warnings,
       summary: result.summary,
       config: schedulerConfig,
+      duplicateStaffNames,
     });
   } catch (e) {
     console.error('ctt-generate error', e);
