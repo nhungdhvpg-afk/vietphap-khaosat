@@ -159,13 +159,13 @@ insert into ctt_procedure_types
   (code, name, duration_minutes, requires_machine, machine_type, rest_after_minutes,
    can_split, active_minutes, monitor_minutes, monitor_max_patients, perform_roles, monitor_roles, is_exam)
 values
-  ('XBBH', 'Xoa bóp bấm huyệt', 30, false, null, 0, false, null, null, 10, array['BS','YS','DD'], null, false),
+  ('XBBH', 'Xoa bóp bấm huyệt', 30, false, null, 0, false, null, null, 10, array['BS','YS'],    null, false),
   ('DC',   'Điện châm',         25, true,  'CHAM', 0, true,  6,   19,  4,  array['BS','YS'],    array['DD'], false),
   ('HC',   'Hào châm',          25, false, null,   0, true,  5,   20,  8,  array['BS','YS'],    array['DD'], false),
   ('TC',   'Thủy châm',         25, false, null,   0, true,  11,  14,  4,  array['BS'],         array['DD'], false),
-  ('XH',   'Xông hơi',          15, true,  'XONG', 15, false, null, null, 10, array['DD','YS'],   null, false),
-  ('CN',   'Cứu ngải',          15, false, null,   0, false, null, null, 10, array['DD','YS','BS'], null, false),
-  ('GH',   'Giác hơi',          15, false, null,   0, false, null, null, 10, array['DD','YS','BS'], null, false),
+  ('XH',   'Xông hơi',          15, true,  'XONG', 15, false, null, null, 10, array['YS'],        null, false),
+  ('CN',   'Cứu ngải',          15, false, null,   0, false, null, null, 10, array['BS','YS'],    null, false),
+  ('GH',   'Giác hơi',          15, false, null,   0, false, null, null, 10, array['BS','YS'],    null, false),
   ('KH',   'Khám / Chỉ định',    5, false, null,   0, false, null, null, 10, array['BS'],         null, true)
 on conflict (code) do nothing;
 
