@@ -626,6 +626,15 @@ function generateSchedule(config, patients) {
     occupiedMinutes: unionMinutes(staffOccupiedIntervals(s.id)),
   }));
 
+  // Số lượt từng loại thủ thuật đã xếp được trong ngày (Xông hơi, Hào châm,
+  // Thủy châm...) — theo đúng thứ tự khai báo trong `procedures` để hiển thị
+  // ổn định, kể cả loại chưa có lượt nào (hiện 0, không ẩn đi).
+  const procedureCount = Object.values(procedures).map((p) => ({
+    code: p.code,
+    name: p.name,
+    count: scheduleEntries.reduce((n, e) => n + (e.procedureCode === p.code ? 1 : 0), 0),
+  }));
+
   return {
     scheduleEntries,
     warnings,
@@ -634,6 +643,7 @@ function generateSchedule(config, patients) {
       completedPatients,
       incompletePatients: warnings.length,
       comboCount,
+      procedureCount,
       machineUtilization,
       staffWorkload,
     },
