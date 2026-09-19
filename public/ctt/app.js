@@ -248,7 +248,21 @@ function renderResults(containerSel, result) {
   for (const p of patients) {
     const myEntries = entries.filter((e) => e.patientId === p.id);
     const combo = myEntries.find((e) => e.comboCode)?.comboCode;
-    const detail = myEntries.map((e) => `${hhmm(e.start)}-${hhmm(e.end)} <b>${procNameOf(e)}</b>${e.machineName ? ' (' + escapeHtml(e.machineName) + ')' : ''} — ${e.staffAssignments.map((a) => `${escapeHtml(staffNameOf(a))}${a.roleType === 'monitor' ? ' (trông)' : ''}`).join(', ')}`).join('<br>');
+    // Với thủ thuật chia đôi (DC/HC/TC), người "thực hiện" chỉ bận đúng vài
+    // phút đặt kim ĐẦU khung giờ, còn người "trông" mới bận suốt phần còn lại
+    // — hiển thị RÕ khung giờ THỰC TẾ của từng người (không chỉ ghi chung 1
+    // khung giờ của cả lượt) để không bị hiểu nhầm là 1 người bận suốt cả
+    // khung giờ hiển thị, dẫn đến tưởng nhầm là xếp trùng khi đối chiếu với
+    // thủ thuật khác của chính người đó.
+    const detail = myEntries.map((e) => {
+      const staffList = e.staffAssignments.map((a) => {
+        const sameAsEntry = a.start === e.start && a.end === e.end;
+        if (sameAsEntry) return escapeHtml(staffNameOf(a));
+        const roleLabel = a.roleType === 'monitor' ? 'trông' : 'thực hiện';
+        return `${escapeHtml(staffNameOf(a))} (${roleLabel} ${hhmm(a.start)}-${hhmm(a.end)})`;
+      }).join(', ');
+      return `${hhmm(e.start)}-${hhmm(e.end)} <b>${procNameOf(e)}</b>${e.machineName ? ' (' + escapeHtml(e.machineName) + ')' : ''} — ${staffList}`;
+    }).join('<br>');
     byPatientHtml += `<tr><td>${p.stt}</td><td>${escapeHtml(p.name)}</td><td>${comboPillHtml(combo)}</td><td>${detail || '<span class="muted">Chưa xếp được thủ thuật nào</span>'}</td></tr>`;
   }
   byPatientHtml += '</tbody></table></div>';
@@ -338,7 +352,13 @@ function exportExcel(result) {
       sheetPatient.push([p.stt, p.name, '', 'CHƯA XẾP ĐƯỢC', '', '', '', '']);
     }
     for (const e of myEntries) {
-      sheetPatient.push([p.stt, p.name, e.comboCode || '', procNameOf(e), hhmm(e.start), hhmm(e.end), e.machineName || '', e.staffAssignments.map((a) => `${staffNameOf(a)}${a.roleType === 'monitor' ? '(trông)' : ''}`).join(', ')]);
+      const staffCol = e.staffAssignments.map((a) => {
+        const sameAsEntry = a.start === e.start && a.end === e.end;
+        if (sameAsEntry) return staffNameOf(a);
+        const roleLabel = a.roleType === 'monitor' ? 'trông' : 'thực hiện';
+        return `${staffNameOf(a)} (${roleLabel} ${hhmm(a.start)}-${hhmm(a.end)})`;
+      }).join(', ');
+      sheetPatient.push([p.stt, p.name, e.comboCode || '', procNameOf(e), hhmm(e.start), hhmm(e.end), e.machineName || '', staffCol]);
     }
   }
 
