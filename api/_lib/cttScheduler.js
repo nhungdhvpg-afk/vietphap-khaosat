@@ -204,9 +204,12 @@ function generateSchedule(config, patients) {
   const machineUsedMinutes = new Map(machines.map((m) => [m.id, 0]));
   const comboCount = {};
 
-  /** Chụp lại toàn bộ trạng thái tài nguyên đang dùng, để có thể HOÀN TÁC
-   * nếu 1 bệnh nhân thử xếp dở trong 1 buổi rồi không xong (VD thiếu 1 bước
-   * cuối) — tránh để lại rác nửa vời rồi mới chuyển sang thử buổi khác. */
+  /** Chụp lại toàn bộ trạng thái tài nguyên đang dùng, để có thể HOÀN TÁC về
+   * đúng lúc này (dù đã đi xa hơn hay đã lùi lại trước đó) — dùng khi 1 bệnh
+   * nhân thử xếp dở trong 1 buổi rồi không xong, hoặc khi cần thử CẢ 2 buổi
+   * rồi mới quyết định áp dụng đúng 1 kết quả. Lưu NGUYÊN VẸN nội dung
+   * scheduleEntries (không chỉ độ dài) để có thể áp lại đúng, kể cả khi kết
+   * quả cần áp lại "dài" hơn trạng thái hiện tại. */
   function snapshotState() {
     return {
       staffBusy: Array.from(staffBusy, ([k, v]) => [k, v.slice()]),
@@ -214,7 +217,7 @@ function generateSchedule(config, patients) {
       monitorLoad: Array.from(monitorLoad, ([k, v]) => [k, v.slice()]),
       staffWorkMinutes: Array.from(staffWorkMinutes),
       machineUsedMinutes: Array.from(machineUsedMinutes),
-      scheduleEntriesLength: scheduleEntries.length,
+      scheduleEntries: scheduleEntries.slice(),
     };
   }
   function restoreState(snap) {
@@ -228,7 +231,7 @@ function generateSchedule(config, patients) {
     for (const [k, v] of snap.staffWorkMinutes) staffWorkMinutes.set(k, v);
     machineUsedMinutes.clear();
     for (const [k, v] of snap.machineUsedMinutes) machineUsedMinutes.set(k, v);
-    scheduleEntries.length = snap.scheduleEntriesLength;
+    scheduleEntries.splice(0, scheduleEntries.length, ...snap.scheduleEntries);
   }
 
   function addStaffBusy(staffId, start, end) {
@@ -569,17 +572,69 @@ function generateSchedule(config, patients) {
       if (entry.patientId === patient.id && !entry.comboCode) entry.comboCode = comboCode;
     }
 
-    return { ok: missing.length === 0, missing, comboCode };
+    return { ok: missing.length === 0, missing, comboCode, usedStep4 };
   }
 
   for (const patient of sortedPatients) {
-    let outcome = null;
+    if (shifts.length <= 1 || optimizationMode === 'max_patients') {
+      // Chỉ 1 ca, hoặc đang ở chế độ tối đa số bệnh nhân (không cần rải đều
+      // Xông giữa 2 buổi) -> giữ cách cũ: thử lần lượt, dùng buổi đầu tiên
+      // xong được.
+      let outcome = null;
+      for (const shiftWindow of shifts) {
+        const snap = snapshotState();
+        outcome = attemptPatientInShift(patient, shiftWindow);
+        if (outcome.ok) break;
+        restoreState(snap);
+      }
+      finalizePatientOutcome(patient, outcome);
+      continue;
+    }
+
+    // Chế độ 'max_xong' với 2 buổi trở lên: THỬ CẢ 2 BUỔI cho mỗi bệnh nhân
+    // (không dừng lại ở buổi đầu tiên xong được) rồi chọn buổi nào cho bệnh
+    // nhân này dùng được Xông hơi — kể cả khi đó là buổi CHIỀU — thay vì luôn
+    // nhét vào buổi sáng trước rồi bỏ mặc máy Xông buổi chiều trống không.
+    // Máy Xông phải chạy hết công suất ở CẢ 2 buổi trước khi chấp nhận cho
+    // ai đó dùng Cứu ngải thay thế.
+    const attempts = [];
     for (const shiftWindow of shifts) {
       const snap = snapshotState();
-      outcome = attemptPatientInShift(patient, shiftWindow);
-      if (outcome.ok) break;
-      restoreState(snap); // buổi này không đủ chỗ cho ĐỦ 4 bước -> hoàn tác sạch, thử buổi kế tiếp từ đầu
+      const outcome = attemptPatientInShift(patient, shiftWindow);
+      if (outcome.ok) {
+        attempts.push({ shiftWindow, outcome, snap: snapshotState() });
+      }
+      restoreState(snap); // luôn hoàn tác — sẽ áp lại đúng 1 lựa chọn cuối cùng bên dưới
     }
+
+    if (attempts.length === 0) {
+      // Không buổi nào xong được đủ 4 bước -> báo thiếu theo lần thử cuối
+      // cùng (buổi chiều) để có thông tin cụ thể nhất.
+      const snap = snapshotState();
+      const lastOutcome = attemptPatientInShift(patient, shifts[shifts.length - 1]);
+      restoreState(snap);
+      finalizePatientOutcome(patient, lastOutcome);
+      continue;
+    }
+
+    // Ưu tiên buổi nào cho Xông hơi; nếu cả 2 (hoặc chỉ 1) đều cho Xông hoặc
+    // đều không, ưu tiên buổi có ÍT lượt Xông hơn tính đến giờ (rải đều tải
+    // giữa 2 buổi thay vì dồn hết vào 1 buổi).
+    function xongCountSoFar(shiftWindow) {
+      return scheduleEntries.filter((e) => e.procedureCode === 'XH' && e.start >= shiftWindow.start && e.start < shiftWindow.end).length;
+    }
+    attempts.sort((a, b) => {
+      const aXong = a.outcome.usedStep4 === 'XH' ? 1 : 0;
+      const bXong = b.outcome.usedStep4 === 'XH' ? 1 : 0;
+      if (aXong !== bXong) return bXong - aXong; // ưu tiên buổi cho Xông hơi trước
+      return xongCountSoFar(a.shiftWindow) - xongCountSoFar(b.shiftWindow); // rồi tới buổi đang ít lượt Xông hơn
+    });
+    const chosen = attempts[0];
+    restoreState(chosen.snap); // áp lại đúng kết quả đã chọn
+    finalizePatientOutcome(patient, chosen.outcome);
+  }
+
+  function finalizePatientOutcome(patient, outcome) {
     if (!outcome.ok) {
       warnings.push({ patientId: patient.id, patientName: patient.name, stt: patient.stt, missingSteps: outcome.missing });
     } else if (outcome.comboCode) {
