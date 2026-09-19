@@ -7,8 +7,9 @@ const supa = (cfg.SUPABASE_URL && cfg.SUPABASE_ANON_KEY)
   ? window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY)
   : null;
 
-let currentConfig = null; // { staff, machines, procedures, combos, settings, fixedMonitor }
+let currentConfig = null; // { staff, machines, procedures, combos, settings, fixedMonitor, me }
 let lastResult = null;    // kết quả chia thủ thuật gần nhất (để xuất Excel/in)
+let me = null;            // { role, ctt_manager, canManage } — quyền của tài khoản đang đăng nhập
 
 function $(sel) { return document.querySelector(sel); }
 function $all(sel) { return Array.from(document.querySelectorAll(sel)); }
@@ -75,12 +76,30 @@ $('#btn-logout').addEventListener('click', async () => {
 // ---------------------------------------------------------------------------
 // TABS
 // ---------------------------------------------------------------------------
+/** Ẩn hẳn tab "Cài đặt" khỏi nhân viên thường (không phải CEO/quản lý CTT) —
+ * và ẩn panel "Quản lý tài khoản" khỏi những người không phải CEO. Chỉ ẩn ở
+ * giao diện để đỡ rối mắt/tránh nhầm lẫn; quyền THẬT được kiểm tra lại ở mọi
+ * API ghi dữ liệu (api/ctt-config.js, api/ctt-accounts.js) nên không thể bỏ
+ * qua bằng cách sửa HTML/JS phía trình duyệt. */
+function applyPermissions() {
+  const caidatBtn = document.querySelector('.tabs button[data-tab="caidat"]');
+  if (caidatBtn) caidatBtn.style.display = me && me.canManage ? '' : 'none';
+  const accountsPanel = $('#panel-accounts');
+  if (accountsPanel) accountsPanel.style.display = me && me.role === 'ceo' ? '' : 'none';
+  // Nếu đang đứng ở tab Cài đặt mà mất quyền (VD bị thu quyền ở tài khoản
+  // khác) -> tự chuyển về tab Chia thủ thuật, tránh màn hình trắng.
+  if (!(me && me.canManage) && $('#tab-caidat').classList.contains('active')) {
+    document.querySelector('.tabs button[data-tab="chia"]').click();
+  }
+}
+
 $all('.tabs button').forEach((btn) => {
   btn.addEventListener('click', () => {
     $all('.tabs button').forEach((b) => b.classList.remove('active'));
     $all('.tabview').forEach((v) => v.classList.remove('active'));
     btn.classList.add('active');
     $('#tab-' + btn.dataset.tab).classList.add('active');
+    if (btn.dataset.tab === 'caidat' && me && me.role === 'ceo') loadAccounts();
   });
 });
 
@@ -394,9 +413,12 @@ function exportExcel(result) {
 async function loadConfigAndRenderSettings() {
   try {
     currentConfig = await api('/api/ctt-config');
+    me = currentConfig.me || null;
+    applyPermissions();
     renderSettings();
   } catch (e) {
     console.error(e);
+    showError('#generate-error', 'Không tải được cấu hình hệ thống. Vui lòng tải lại trang (F5).');
   }
 }
 
@@ -422,6 +444,10 @@ function renderSettings() {
     </tr>`).join('');
   $all('.toggle-staff-active').forEach((chk) => {
     chk.addEventListener('change', async (ev) => {
+      if (!ev.target.checked && !confirm('Ngừng hoạt động nhân sự này? Họ sẽ không được xếp lịch chia thủ thuật nữa cho tới khi bật lại.')) {
+        ev.target.checked = true;
+        return;
+      }
       const tr = ev.target.closest('tr');
       const s = c.staff.find((x) => x.id === tr.dataset.id);
       await api('/api/ctt-config', { method: 'POST', body: JSON.stringify({ action: 'upsert_staff', payload: { id: s.id, name: s.name, role: s.role, qualification: s.qualification, note: s.note, active: ev.target.checked } }) });
@@ -439,6 +465,10 @@ function renderSettings() {
     </tr>`).join('');
   $all('.toggle-machine-active').forEach((chk) => {
     chk.addEventListener('change', async (ev) => {
+      if (!ev.target.checked && !confirm('Ngừng hoạt động máy này? Máy sẽ không được xếp bệnh nhân nữa cho tới khi bật lại.')) {
+        ev.target.checked = true;
+        return;
+      }
       const tr = ev.target.closest('tr');
       const m = c.machines.find((x) => x.id === tr.dataset.id);
       await api('/api/ctt-config', { method: 'POST', body: JSON.stringify({ action: 'upsert_machine', payload: { id: m.id, name: m.name, type: m.type, active: ev.target.checked } }) });
@@ -483,6 +513,7 @@ function renderSettings() {
 }
 
 $('#btn-save-settings').addEventListener('click', async () => {
+  if (!confirm('Lưu thay đổi giờ ca? Áp dụng cho MỌI lượt chia thủ thuật kể từ bây giờ, kể cả những ngày đã lên lịch trước nhưng chưa diễn ra.')) return;
   const payload = {
     shift1_start: $('#set-shift1-start').value,
     shift1_end: $('#set-shift1-end').value,
@@ -516,6 +547,85 @@ $('#btn-add-machine').addEventListener('click', async () => {
   await api('/api/ctt-config', { method: 'POST', body: JSON.stringify({ action: 'upsert_machine', payload: { name, type, active: true } }) });
   $('#new-machine-name').value = '';
   await loadConfigAndRenderSettings();
+});
+
+// ---------------------------------------------------------------------------
+// QUẢN LÝ TÀI KHOẢN (chỉ CEO thấy — xem applyPermissions())
+// ---------------------------------------------------------------------------
+const ROLE_LABELS = { ceo: 'CEO', department_head: 'Trưởng khoa', ctt_staff: 'Nhân viên (chỉ Chia thủ thuật)' };
+
+async function loadAccounts() {
+  if (!(me && me.role === 'ceo')) return;
+  try {
+    const { accounts } = await api('/api/ctt-accounts');
+    renderAccounts(accounts);
+  } catch (e) {
+    showError('#account-error', e.message);
+  }
+}
+
+function renderAccounts(accounts) {
+  $('#accounts-tbody').innerHTML = accounts.map((a) => `
+    <tr data-id="${a.id}">
+      <td>${escapeHtml(a.email)}</td>
+      <td>${escapeHtml(ROLE_LABELS[a.role] || a.role)}${a.department ? `<br><span class="muted">${escapeHtml(a.department)}</span>` : ''}</td>
+      <td><input type="checkbox" class="toggle-acct-manager" ${a.ctt_manager ? 'checked' : ''} ${a.role === 'ceo' ? 'disabled' : ''}></td>
+      <td>${a.role === 'ceo' ? '' : '<span class="del-row del-account" title="Xoá tài khoản">✕</span>'}</td>
+    </tr>`).join('');
+
+  $all('.toggle-acct-manager').forEach((chk) => {
+    chk.addEventListener('change', async (ev) => {
+      const id = ev.target.closest('tr').dataset.id;
+      showError('#account-error', '');
+      try {
+        await api('/api/ctt-accounts', { method: 'POST', body: JSON.stringify({ action: 'update_permission', payload: { id, ctt_manager: ev.target.checked } }) });
+      } catch (e) {
+        ev.target.checked = !ev.target.checked;
+        showError('#account-error', e.message);
+      }
+    });
+  });
+
+  $all('.del-account').forEach((el) => {
+    el.addEventListener('click', async (ev) => {
+      const tr = ev.target.closest('tr');
+      const email = tr.querySelector('td').textContent;
+      if (!confirm(`Xoá tài khoản "${email}"? Người này sẽ KHÔNG đăng nhập được nữa. Không thể hoàn tác.`)) return;
+      showError('#account-error', '');
+      try {
+        await api('/api/ctt-accounts', { method: 'POST', body: JSON.stringify({ action: 'delete_account', payload: { id: tr.dataset.id } }) });
+        await loadAccounts();
+      } catch (e) {
+        showError('#account-error', e.message);
+      }
+    });
+  });
+}
+
+$('#new-acct-role').addEventListener('change', () => {
+  $('#new-acct-dept-wrap').style.display = $('#new-acct-role').value === 'department_head' ? '' : 'none';
+});
+
+$('#btn-add-account').addEventListener('click', async () => {
+  showError('#account-error', '');
+  const email = $('#new-acct-email').value.trim();
+  const role = $('#new-acct-role').value;
+  const department = $('#new-acct-dept').value;
+  const ctt_manager = $('#new-acct-manager').checked;
+  if (!email) { showError('#account-error', 'Nhập email.'); return; }
+  const btn = $('#btn-add-account');
+  btn.disabled = true;
+  try {
+    const result = await api('/api/ctt-accounts', { method: 'POST', body: JSON.stringify({ action: 'create_account', payload: { email, role, department, ctt_manager } }) });
+    alert(`Đã tạo tài khoản cho ${result.email}.\n\nMật khẩu tạm thời (chỉ hiện 1 lần — chép lại gửi cho nhân viên ngay):\n${result.tempPassword}\n\nNhân viên nên đăng nhập thử ngay để xác nhận, mật khẩu này KHÔNG được lưu lại ở đâu khác.`);
+    $('#new-acct-email').value = '';
+    $('#new-acct-manager').checked = false;
+    await loadAccounts();
+  } catch (e) {
+    showError('#account-error', e.message);
+  } finally {
+    btn.disabled = false;
+  }
 });
 
 // ---------------------------------------------------------------------------

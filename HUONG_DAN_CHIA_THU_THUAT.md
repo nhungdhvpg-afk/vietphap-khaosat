@@ -80,8 +80,11 @@ việc đẩy code này lên nhánh và merge vào nhánh chính sẽ tự độ
 ### Xem lại lịch ngày trước
 Vào tab **"Xem lại theo ngày"**, chọn ngày, bấm **"Tải lịch"**.
 
-### Cài đặt
+### Cài đặt (chỉ CEO và người được cấp quyền "Quản lý Cài đặt" thấy tab này)
 Vào tab **"Cài đặt"** để:
+- **Quản lý tài khoản** (chỉ CEO thấy mục này) — tạo tài khoản đăng nhập mới
+  cho nhân viên, xem [HUONG_DAN_SU_DUNG_NHAN_VIEN.md](./HUONG_DAN_SU_DUNG_NHAN_VIEN.md)
+  để biết cách cấp tài khoản và những gì nhân viên thấy được.
 - Đổi giờ ca sáng/chiều (mặc định đúng khung BHYT 07:00–11:30, 13:30–17:00).
 - Bật/tắt nhân sự đang tham gia chia thủ thuật (VD: khi có người nghỉ phép).
 - Bật/tắt máy (khi máy hỏng, sửa chữa).
@@ -90,6 +93,10 @@ Vào tab **"Cài đặt"** để:
   cùng lúc cho từng loại thủ thuật (mặc định: Điện châm/Thủy châm = 4 người
   cùng lúc do dùng chung 4 máy Châm; Hào châm = 8).
 - Thêm nhân sự/máy mới khi phòng khám mở rộng.
+
+**Trước khi dùng "Quản lý tài khoản" lần đầu**, cần chạy thêm 1 file SQL:
+mở `supabase/schema_ctt_accounts.sql`, copy toàn bộ, dán vào Supabase SQL
+Editor rồi bấm Run (chỉ cần chạy 1 lần, giống Bước 1 ở trên).
 
 ---
 

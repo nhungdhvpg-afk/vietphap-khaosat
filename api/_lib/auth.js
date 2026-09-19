@@ -13,12 +13,20 @@ async function getStaffFromRequest(req) {
 
   const { data: staff, error: staffError } = await supabaseAdmin
     .from('staff_accounts')
-    .select('role, department')
+    .select('id, email, role, department, ctt_manager')
     .eq('id', userData.user.id)
     .maybeSingle();
   if (staffError || !staff) return null;
 
-  return staff; // { role, department }
+  return staff; // { id, email, role, department, ctt_manager }
 }
 
-module.exports = { getStaffFromRequest };
+/** Có quyền sửa Cài đặt của module Chia thủ thuật (nhân sự/máy móc/giờ ca...)
+ * hay không: CEO luôn có toàn quyền; ngoài ra tài khoản nào được CEO đánh dấu
+ * ctt_manager=true cũng được — không liên quan đến role department_head vốn
+ * chỉ có ý nghĩa cho module Khảo sát. */
+function isCttManager(staffAcct) {
+  return !!staffAcct && (staffAcct.role === 'ceo' || staffAcct.ctt_manager === true);
+}
+
+module.exports = { getStaffFromRequest, isCttManager };
