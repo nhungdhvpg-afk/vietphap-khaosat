@@ -196,7 +196,8 @@ values
   ('shift1_end',   '11:30', 'Giờ kết thúc ca sáng', 'Theo quy định BHYT — không xếp thủ thuật vượt quá giờ này'),
   ('shift2_start', '13:30', 'Giờ bắt đầu ca chiều', 'Theo quy định BHYT — không xếp thủ thuật trước giờ này'),
   ('shift2_end',   '17:00', 'Giờ kết thúc ca chiều', 'Theo quy định BHYT — không xếp thủ thuật vượt quá giờ này'),
-  ('transfer_buffer_minutes', '2', 'Thời gian di chuyển giữa 2 thủ thuật (phút)', 'Khoảng nghỉ ngắn bắt buộc để bệnh nhân di chuyển phòng/chờ đến lượt tiếp theo')
+  ('transfer_buffer_minutes', '2', 'Thời gian di chuyển giữa 2 thủ thuật (phút)', 'Khoảng nghỉ ngắn bắt buộc để bệnh nhân di chuyển phòng/chờ đến lượt tiếp theo'),
+  ('optimization_mode', 'max_xong', 'Ưu tiên tối ưu theo', 'max_xong = tận dụng tối đa máy Xông hơi (mặc định); max_patients = tối đa số bệnh nhân đáp ứng được trong ngày, dùng khi lượng bệnh nhân vượt khả năng phục vụ')
 on conflict (key) do nothing;
 
 -- Nhân sự Y học cổ truyền — Việt Pháp (theo danh sách đăng ký hành nghề)

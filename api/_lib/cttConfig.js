@@ -28,6 +28,7 @@ async function loadCttConfig() {
     { start: hhmmToMinutes(settings.shift2_start || '13:30'), end: hhmmToMinutes(settings.shift2_end || '17:00') },
   ];
   const transferBufferMinutes = Number(settings.transfer_buffer_minutes || 2);
+  const optimizationMode = settings.optimization_mode === 'max_patients' ? 'max_patients' : 'max_xong';
 
   const fixedMonitorByProcId = new Map();
   for (const row of fixedMonitorRows || []) fixedMonitorByProcId.set(row.procedure_type_id, row.staff_id);
@@ -62,7 +63,7 @@ async function loadCttConfig() {
   const machines = (machineRows || []).map((m) => ({ id: m.id, name: m.name, type: m.type, active: m.active }));
 
   return {
-    schedulerConfig: { shifts, transferBufferMinutes, procedures, staff: staff.filter((s) => s.active), machines: machines.filter((m) => m.active), comboLabels },
+    schedulerConfig: { shifts, transferBufferMinutes, procedures, staff: staff.filter((s) => s.active), machines: machines.filter((m) => m.active), comboLabels, optimizationMode },
     raw: { staff, machines, procedures: procRows || [], combos: comboRows || [], settings: settingRows || [], fixedMonitor: fixedMonitorRows || [] },
   };
 }

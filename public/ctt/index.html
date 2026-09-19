@@ -169,6 +169,20 @@
         </div>
 
         <div class="panel">
+          <h3>Mục tiêu tối ưu</h3>
+          <p class="muted" style="margin-top:0;">Chọn thuật toán ưu tiên theo mục tiêu nào khi chia thủ thuật.</p>
+          <label style="display:flex;align-items:flex-start;gap:8px;font-weight:400;margin:10px 0;cursor:pointer;">
+            <input type="radio" name="opt-mode" value="max_xong" id="opt-mode-xong" style="margin-top:3px;">
+            <span><b>Tối đa hoá Xông hơi</b> — tận dụng tối đa 2 máy Xông, miễn không làm bệnh nhân thiếu bước. Dùng khi lượng bệnh nhân còn trong khả năng đáp ứng.</span>
+          </label>
+          <label style="display:flex;align-items:flex-start;gap:8px;font-weight:400;margin:10px 0;cursor:pointer;">
+            <input type="radio" name="opt-mode" value="max_patients" id="opt-mode-patients" style="margin-top:3px;">
+            <span><b>Tối đa hoá số bệnh nhân đáp ứng</b> — luôn chọn phương án nhanh nhất cho từng người, kể cả khi phải bớt dùng máy Xông. Dùng khi lượng bệnh nhân vượt khả năng phục vụ.</span>
+          </label>
+          <button class="btn btn-primary btn-sm" id="btn-save-opt-mode" style="margin-top:8px;">Lưu mục tiêu tối ưu</button>
+        </div>
+
+        <div class="panel">
           <h3>Người trông cố định</h3>
           <p class="muted" style="margin-top:0;">Ai LUÔN theo dõi 1 loại thủ thuật cụ thể (VD: Vi Thị Hoá luôn trông Thủy châm). Để trống = ai trong vai trò phù hợp cũng theo dõi được.</p>
           <div id="fixed-monitor-rows"></div>
