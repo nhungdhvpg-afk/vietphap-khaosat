@@ -85,7 +85,7 @@
 
   <div id="view-login" class="login-wrap">
     <h2>Đăng nhập</h2>
-    <p>Dùng chung tài khoản với hệ thống khảo sát Việt Pháp.</p>
+    <p>Dùng tài khoản được CEO cấp (email + mật khẩu tạm). Nếu chưa có tài khoản, liên hệ CEO/quản lý để được cấp.</p>
     <label>Email</label>
     <input type="email" id="login-email" autocomplete="username" placeholder="ten@vietphapclinic.vn">
     <label>Mật khẩu</label>
@@ -151,6 +151,36 @@
 
     <!-- ============ TAB: CÀI ĐẶT ============ -->
     <div class="tabview" id="tab-caidat">
+      <div class="panel" id="panel-accounts" style="display:none;">
+        <h3>Quản lý tài khoản đăng nhập</h3>
+        <p class="muted" style="margin-top:0;">Chỉ CEO thấy mục này. Tài khoản "Nhân viên (chỉ Chia thủ thuật)" chỉ dùng được tab "Chia thủ thuật" và "Xem lại theo ngày" — không thấy tab Cài đặt.</p>
+        <table><thead><tr><th>Email</th><th style="width:170px;">Vai trò</th><th style="width:110px;">Quản lý Cài đặt</th><th style="width:70px;"></th></tr></thead><tbody id="accounts-tbody"></tbody></table>
+        <div class="row" style="margin-top:14px;">
+          <div><label>Email</label><input type="email" id="new-acct-email" placeholder="nhanvien@vietphapclinic.vn"></div>
+          <div style="max-width:220px;"><label>Vai trò</label>
+            <select id="new-acct-role">
+              <option value="ctt_staff">Nhân viên (chỉ Chia thủ thuật)</option>
+              <option value="department_head">Trưởng khoa (dùng cả Khảo sát)</option>
+              <option value="ceo">CEO (toàn quyền)</option>
+            </select>
+          </div>
+          <div id="new-acct-dept-wrap" style="max-width:220px;display:none;">
+            <label>Khoa/bộ phận</label>
+            <select id="new-acct-dept">
+              <option>Nội</option><option>QL bệnh Huyết áp - Tiểu đường</option><option>Y học cổ truyền</option>
+              <option>Sản</option><option>Nhi</option><option>Ngoại</option><option>Cấp cứu</option>
+            </select>
+          </div>
+          <div style="max-width:170px;">
+            <label style="display:flex;align-items:center;gap:6px;font-weight:400;margin-top:8px;cursor:pointer;">
+              <input type="checkbox" id="new-acct-manager"> Được sửa Cài đặt CTT
+            </label>
+          </div>
+          <div style="max-width:130px;"><button class="btn btn-primary btn-sm" id="btn-add-account">+ Tạo tài khoản</button></div>
+        </div>
+        <div class="error-box" id="account-error"></div>
+      </div>
+
       <div class="settings-grid">
         <div class="panel">
           <h3>Ca làm việc (theo quy định BHYT)</h3>

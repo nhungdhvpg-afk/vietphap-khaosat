@@ -2,7 +2,7 @@
 // việc, người trông cố định. GET để tải toàn bộ cấu hình cho màn hình
 // "Cài đặt"; POST để thêm/sửa (action-based, xem các nhánh bên dưới).
 const { getSupabaseAdmin } = require('./_lib/supabaseAdmin');
-const { getStaffFromRequest } = require('./_lib/auth');
+const { getStaffFromRequest, isCttManager } = require('./_lib/auth');
 const { loadCttConfig } = require('./_lib/cttConfig');
 
 module.exports = async (req, res) => {
@@ -15,9 +15,14 @@ module.exports = async (req, res) => {
   const db = getSupabaseAdmin();
 
   if (req.method === 'GET') {
+    // GET dùng cho MỌI người đã đăng nhập (kể cả nhân viên thường) — cần để
+    // hiển thị tên nhân sự/máy/combo trong tab "Chia thủ thuật", không chỉ
+    // riêng tab Cài đặt. `me` cho frontend biết có nên hiện tab Cài đặt/Quản
+    // lý tài khoản hay không, KHÔNG dùng để tự cấp quyền ở phía trình duyệt —
+    // mọi hành động ghi vẫn được kiểm tra lại ở POST bên dưới.
     try {
       const { raw } = await loadCttConfig();
-      res.status(200).json(raw);
+      res.status(200).json({ ...raw, me: { role: staffAcct.role, ctt_manager: staffAcct.ctt_manager, canManage: isCttManager(staffAcct) } });
     } catch (e) {
       console.error('ctt-config GET error', e);
       res.status(500).json({ error: 'Không tải được cấu hình.' });
@@ -26,6 +31,10 @@ module.exports = async (req, res) => {
   }
 
   if (req.method === 'POST') {
+    if (!isCttManager(staffAcct)) {
+      res.status(403).json({ error: 'Bạn không có quyền sửa Cài đặt. Chỉ CEO hoặc người được cấp quyền quản lý mới sửa được.' });
+      return;
+    }
     try {
       const { action, payload } = req.body || {};
       switch (action) {
