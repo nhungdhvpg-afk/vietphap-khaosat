@@ -116,6 +116,12 @@ function minutesToHHMM(mins) {
  */
 function generateSchedule(config, patients) {
   const { shifts, transferBufferMinutes = 2, procedures, staff, machines, comboLabels = {} } = config;
+  // Mỗi bệnh nhân PHẢI hoàn tất cả 4 bước TRONG CÙNG 1 buổi (đến 1 lần, làm
+  // xong rồi về — không quay lại buổi sau). `activeShifts` là buổi đang được
+  // thử cho bệnh nhân hiện tại; mọi hàm tìm chỗ trống bên dưới đều tra cứu
+  // biến này (qua closure) thay vì toàn bộ `shifts`, để không bao giờ vô tình
+  // xếp 1 người vắt sang buổi khác.
+  let activeShifts = shifts.slice(0, 1);
 
   // Nhân sự được gán "trông cố định" 1 thủ thuật (VD Vi Thị Hoá -> Thủy châm)
   // được xem là ĐÃ CÓ VIỆC TOÀN THỜI GIAN — không được kéo đi làm việc khác
@@ -161,7 +167,7 @@ function generateSchedule(config, patients) {
    * đó phải nằm gọn trong 1 ca làm việc và không chồng lịch bận nào khác). */
   function isStaffFreeAt(staffId, start, end) {
     if (start < -MINUTE_EPS) return false;
-    const inShift = shifts.some((s) => start >= s.start - MINUTE_EPS && end <= s.end + MINUTE_EPS);
+    const inShift = activeShifts.some((s) => start >= s.start - MINUTE_EPS && end <= s.end + MINUTE_EPS);
     if (!inShift) return false;
     return !overlapsAny(staffOccupiedIntervals(staffId), start, end);
   }
@@ -175,6 +181,33 @@ function generateSchedule(config, patients) {
   const staffWorkMinutes = new Map(staff.map((s) => [s.id, 0]));
   const machineUsedMinutes = new Map(machines.map((m) => [m.id, 0]));
   const comboCount = {};
+
+  /** Chụp lại toàn bộ trạng thái tài nguyên đang dùng, để có thể HOÀN TÁC
+   * nếu 1 bệnh nhân thử xếp dở trong 1 buổi rồi không xong (VD thiếu 1 bước
+   * cuối) — tránh để lại rác nửa vời rồi mới chuyển sang thử buổi khác. */
+  function snapshotState() {
+    return {
+      staffBusy: Array.from(staffBusy, ([k, v]) => [k, v.slice()]),
+      machineBusy: Array.from(machineBusy, ([k, v]) => [k, v.slice()]),
+      monitorLoad: Array.from(monitorLoad, ([k, v]) => [k, v.slice()]),
+      staffWorkMinutes: Array.from(staffWorkMinutes),
+      machineUsedMinutes: Array.from(machineUsedMinutes),
+      scheduleEntriesLength: scheduleEntries.length,
+    };
+  }
+  function restoreState(snap) {
+    staffBusy.clear();
+    for (const [k, v] of snap.staffBusy) staffBusy.set(k, v);
+    machineBusy.clear();
+    for (const [k, v] of snap.machineBusy) machineBusy.set(k, v);
+    monitorLoad.clear();
+    for (const [k, v] of snap.monitorLoad) monitorLoad.set(k, v);
+    staffWorkMinutes.clear();
+    for (const [k, v] of snap.staffWorkMinutes) staffWorkMinutes.set(k, v);
+    machineUsedMinutes.clear();
+    for (const [k, v] of snap.machineUsedMinutes) machineUsedMinutes.set(k, v);
+    scheduleEntries.length = snap.scheduleEntriesLength;
+  }
 
   function addStaffBusy(staffId, start, end) {
     staffBusy.get(staffId).push({ start, end });
@@ -191,16 +224,16 @@ function generateSchedule(config, patients) {
       let best = null;
       for (const machine of candidateMachines) {
         const mBusy = machineBusy.get(machine.id) || [];
-        const mSlot = findEarliestSlot(mBusy, shifts, proc.duration_minutes, notBefore);
+        const mSlot = findEarliestSlot(mBusy, activeShifts, proc.duration_minutes, notBefore);
         if (!mSlot) continue;
-        const staffSlot = findEarliestStaffSlot(pool, staffOccupiedIntervals, shifts, proc.duration_minutes, mSlot.start);
+        const staffSlot = findEarliestStaffSlot(pool, staffOccupiedIntervals, activeShifts, proc.duration_minutes, mSlot.start);
         if (!staffSlot || staffSlot.start !== mSlot.start) {
           // máy rảnh nhưng đúng lúc đó không có nhân sự -> thử khớp lại: lấy
           // mốc muộn hơn giữa máy và người, xếp lại cả hai từ mốc đó.
           const notBefore2 = staffSlot ? Math.max(mSlot.start, staffSlot.start) : null;
           if (notBefore2 == null) continue;
-          const mSlot2 = findEarliestSlot(mBusy, shifts, proc.duration_minutes, notBefore2);
-          const staffSlot2 = mSlot2 ? findEarliestStaffSlot(pool, staffOccupiedIntervals, shifts, proc.duration_minutes, mSlot2.start) : null;
+          const mSlot2 = findEarliestSlot(mBusy, activeShifts, proc.duration_minutes, notBefore2);
+          const staffSlot2 = mSlot2 ? findEarliestStaffSlot(pool, staffOccupiedIntervals, activeShifts, proc.duration_minutes, mSlot2.start) : null;
           if (!mSlot2 || !staffSlot2 || staffSlot2.start !== mSlot2.start) continue;
           const candidate = { start: mSlot2.start, end: mSlot2.end, machineId: machine.id, staffId: staffSlot2.staffId };
           if (!best || candidate.start < best.start) best = candidate;
@@ -211,7 +244,7 @@ function generateSchedule(config, patients) {
       }
       return best;
     }
-    const staffSlot = findEarliestStaffSlot(pool, staffOccupiedIntervals, shifts, proc.duration_minutes, notBefore);
+    const staffSlot = findEarliestStaffSlot(pool, staffOccupiedIntervals, activeShifts, proc.duration_minutes, notBefore);
     if (!staffSlot) return null;
     return { start: staffSlot.start, end: staffSlot.end, machineId: null, staffId: staffSlot.staffId };
   }
@@ -244,7 +277,7 @@ function generateSchedule(config, patients) {
         // tiên nếu mốc đó không tìm được người thực hiện + người trông phù hợp).
         let t = notBefore;
         for (let guard = 0; guard < 1000; guard++) {
-          const mSlot = findEarliestSlot(mBusy, shifts, totalDur, t);
+          const mSlot = findEarliestSlot(mBusy, activeShifts, totalDur, t);
           if (!mSlot) break;
           const performStaffId = findFreeStaffAt(performPool, mSlot.start, mSlot.start + activeDur);
           if (performStaffId) {
@@ -273,11 +306,11 @@ function generateSchedule(config, patients) {
       const mKey = monitorKey(proc) + ':' + monitorStaffId;
       const monitorIntervals = getMonitorIntervals(mKey);
       const candidateStarts = new Set([notBefore]);
-      for (const shift of shifts) candidateStarts.add(Math.max(notBefore, shift.start));
+      for (const shift of activeShifts) candidateStarts.add(Math.max(notBefore, shift.start));
       for (const iv of monitorIntervals) if (iv.end >= notBefore) candidateStarts.add(iv.end);
       const sortedStarts = Array.from(candidateStarts).sort((a, b) => a - b);
 
-      for (const shift of shifts) {
+      for (const shift of activeShifts) {
         let foundInShift = null;
         for (const monitorStart of sortedStarts) {
           if (monitorStart < notBefore - MINUTE_EPS || monitorStart < shift.start - MINUTE_EPS) continue;
@@ -355,7 +388,7 @@ function generateSchedule(config, patients) {
     if (!fallbackPlan) return { plan: primaryPlan, usedPrimary: true };
     if (!primaryPlan) return { plan: fallbackPlan, usedPrimary: false };
     // Ca hiện tại (dựa theo notBefore) còn bao nhiêu thời gian?
-    const shift = shifts.find((s) => notBefore >= s.start - MINUTE_EPS && notBefore <= s.end + MINUTE_EPS) || shifts[shifts.length - 1];
+    const shift = activeShifts.find((s) => notBefore >= s.start - MINUTE_EPS && notBefore <= s.end + MINUTE_EPS) || activeShifts[activeShifts.length - 1];
     const latestSafeStart = shift.end - remainingDurationAfterThis;
     if (primaryPlan.start <= latestSafeStart + MINUTE_EPS) {
       return { plan: primaryPlan, usedPrimary: true };
@@ -367,12 +400,16 @@ function generateSchedule(config, patients) {
   const sortedPatients = patients.slice().sort((a, b) => a.stt - b.stt);
   const procByCode = Object.fromEntries(Object.values(procedures).map((p) => [p.code, p]));
 
-  for (const patient of sortedPatients) {
+  /** Thử xếp đủ 4 bước cho 1 bệnh nhân, CHỈ TRONG PHẠM VI 1 buổi (shiftWindow).
+   * Trả về { ok, missing, comboCode }. Không tự rollback — bên gọi (vòng lặp
+   * chính) chịu trách nhiệm chụp/khôi phục trạng thái quanh lời gọi này. */
+  function attemptPatientInShift(patient, shiftWindow) {
+    activeShifts = [shiftWindow];
     const comboOverride = patient.comboOverride && comboLabels[patient.comboOverride];
     const forceStep2 = comboOverride ? comboOverride.step2Code : null;
     const forceStep4 = comboOverride ? comboOverride.step4Code : null;
 
-    const patientState = { id: patient.id, cursor: shifts[0].start };
+    const patientState = { id: patient.id, cursor: shiftWindow.start };
     let usedStep2 = null; // 'DC' | 'HC'
     let usedStep4 = null; // 'XH' | 'CN'
     const missing = [];
@@ -469,21 +506,35 @@ function generateSchedule(config, patients) {
       }
     }
 
-    if (missing.length > 0) {
-      warnings.push({ patientId: patient.id, patientName: patient.name, stt: patient.stt, missingSteps: missing });
-    }
-
     const comboCode = comboOverride
       ? patient.comboOverride
       : Object.keys(comboLabels).find((code) => {
           const c = comboLabels[code];
           return c.step2Code === usedStep2 && c.step4Code === usedStep4;
         }) || null;
-    if (comboCode) comboCount[comboCode] = (comboCount[comboCode] || 0) + 1;
 
-    // gắn nhãn combo vào các entry vừa tạo cho bệnh nhân này
+    // gắn nhãn combo vào các entry vừa tạo cho bệnh nhân này (chỉ có ý nghĩa
+    // nếu attempt này thành công; nếu thất bại, bên gọi sẽ rollback nên các
+    // entry này biến mất theo, không cần dọn ở đây)
     for (const entry of scheduleEntries) {
       if (entry.patientId === patient.id && !entry.comboCode) entry.comboCode = comboCode;
+    }
+
+    return { ok: missing.length === 0, missing, comboCode };
+  }
+
+  for (const patient of sortedPatients) {
+    let outcome = null;
+    for (const shiftWindow of shifts) {
+      const snap = snapshotState();
+      outcome = attemptPatientInShift(patient, shiftWindow);
+      if (outcome.ok) break;
+      restoreState(snap); // buổi này không đủ chỗ cho ĐỦ 4 bước -> hoàn tác sạch, thử buổi kế tiếp từ đầu
+    }
+    if (!outcome.ok) {
+      warnings.push({ patientId: patient.id, patientName: patient.name, stt: patient.stt, missingSteps: outcome.missing });
+    } else if (outcome.comboCode) {
+      comboCount[outcome.comboCode] = (comboCount[outcome.comboCode] || 0) + 1;
     }
   }
 
