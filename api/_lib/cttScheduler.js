@@ -112,12 +112,22 @@ function minutesToHHMM(mins) {
 
 /**
  * Chạy thuật toán chia thủ thuật.
- * @param {object} config - { shifts, transferBufferMinutes, procedures, staff, machines, comboLabels }
+ * @param {object} config - { shifts, transferBufferMinutes, procedures, staff, machines,
+ *   comboLabels, optimizationMode }. optimizationMode:
+ *   - 'max_xong' (mặc định): tận dụng Xông hơi/Điện châm mỗi khi vẫn còn máy
+ *     VÀ không làm hỏng khả năng hoàn tất các bước khác của bệnh nhân đó —
+ *     phù hợp khi số bệnh nhân/ngày còn trong khả năng đáp ứng, muốn khai
+ *     thác tối đa 2 máy Xông hiện có.
+ *   - 'max_patients': bỏ thiên hướng ưu tiên máy, luôn chọn phương án nào
+ *     xong sớm hơn cho từng bệnh nhân (Xông/Cứu ngải, Điện/Hào châm đều như
+ *     nhau) — phù hợp khi lượng bệnh nhân vượt khả năng đáp ứng của 2 máy
+ *     Xông, cần tối đa số người được phục vụ trong ngày hơn là tối đa số
+ *     lượt Xông.
  * @param {Array}  patients - [{ id, stt, name }], đã sắp theo stt tăng dần hoặc sẽ được sắp lại.
  * @returns {object} { scheduleEntries, warnings, summary }
  */
 function generateSchedule(config, patients) {
-  const { shifts, transferBufferMinutes = 2, procedures, staff, machines, comboLabels = {} } = config;
+  const { shifts, transferBufferMinutes = 2, procedures, staff, machines, comboLabels = {}, optimizationMode = 'max_xong' } = config;
   // Mỗi bệnh nhân PHẢI hoàn tất cả 4 bước TRONG CÙNG 1 buổi (đến 1 lần, làm
   // xong rồi về — không quay lại buổi sau). `activeShifts` là buổi đang được
   // thử cho bệnh nhân hiện tại; mọi hàm tìm chỗ trống bên dưới đều tra cứu
@@ -394,17 +404,27 @@ function generateSchedule(config, patients) {
     return proc.fixed_monitor_staff_id || null;
   }
 
-  /** Với 1 lượt "khe co dãn" (VD Điện châm/Hào châm, hoặc Xông hơi/Cứu ngải),
-   * ưu tiên phương án "chính" (dùng máy — Điện châm/Xông hơi) hơn "dự phòng",
-   * NHƯNG chỉ khi chọn phương án chính không làm hỏng khả năng hoàn tất các
-   * bước còn lại của bệnh nhân. Dùng `checkStillFeasible(cursorAfter)` — thử
-   * THẬT (không heuristic phỏng đoán thời lượng) xem các bước còn lại có còn
-   * xếp được không nếu bệnh nhân rảnh từ `cursorAfter` — để không bỏ lỡ máy
-   * Xông/Châm còn trống chỉ vì ước lượng sai. */
+  /** Với 1 lượt "khe co dãn" (VD Điện châm/Hào châm, hoặc Xông hơi/Cứu ngải):
+   *
+   * - Chế độ 'max_xong' (mặc định): ưu tiên phương án "chính" (dùng máy —
+   *   Điện châm/Xông hơi) hơn "dự phòng", NHƯNG chỉ khi chọn phương án chính
+   *   không làm hỏng khả năng hoàn tất các bước còn lại của bệnh nhân. Dùng
+   *   `checkStillFeasible(cursorAfter)` — thử THẬT (không heuristic phỏng
+   *   đoán thời lượng) xem các bước còn lại có còn xếp được không nếu bệnh
+   *   nhân rảnh từ `cursorAfter` — để không bỏ lỡ máy Xông/Châm còn trống
+   *   chỉ vì ước lượng sai.
+   * - Chế độ 'max_patients': bỏ hẳn thiên hướng ưu tiên máy, luôn chọn
+   *   phương án nào cho bệnh nhân xong SỚM HƠN — để tối đa tổng số bệnh
+   *   nhân phục vụ được trong ngày thay vì tối đa số lượt dùng máy Xông. */
   function chooseBiasedOption(primaryPlan, fallbackPlan, checkStillFeasible) {
     if (!primaryPlan && !fallbackPlan) return null;
     if (!fallbackPlan) return { plan: primaryPlan, usedPrimary: true };
     if (!primaryPlan) return { plan: fallbackPlan, usedPrimary: false };
+    if (optimizationMode === 'max_patients') {
+      return primaryPlan.end <= fallbackPlan.end
+        ? { plan: primaryPlan, usedPrimary: true }
+        : { plan: fallbackPlan, usedPrimary: false };
+    }
     if (checkStillFeasible(primaryPlan.end + transferBufferMinutes)) {
       return { plan: primaryPlan, usedPrimary: true };
     }

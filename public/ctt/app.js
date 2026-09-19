@@ -372,6 +372,9 @@ function renderSettings() {
   $('#set-shift2-start').value = settingsMap.shift2_start || '';
   $('#set-shift2-end').value = settingsMap.shift2_end || '';
   $('#set-buffer').value = settingsMap.transfer_buffer_minutes || 2;
+  const optMode = settingsMap.optimization_mode === 'max_patients' ? 'max_patients' : 'max_xong';
+  $('#opt-mode-xong').checked = optMode === 'max_xong';
+  $('#opt-mode-patients').checked = optMode === 'max_patients';
 
   // Nhân sự
   $('#staff-tbody').innerHTML = (c.staff || []).map((s) => `
@@ -452,6 +455,12 @@ $('#btn-save-settings').addEventListener('click', async () => {
     transfer_buffer_minutes: $('#set-buffer').value,
   };
   await api('/api/ctt-config', { method: 'POST', body: JSON.stringify({ action: 'update_settings', payload }) });
+  await loadConfigAndRenderSettings();
+});
+
+$('#btn-save-opt-mode').addEventListener('click', async () => {
+  const optimization_mode = $('#opt-mode-patients').checked ? 'max_patients' : 'max_xong';
+  await api('/api/ctt-config', { method: 'POST', body: JSON.stringify({ action: 'update_settings', payload: { optimization_mode } }) });
   await loadConfigAndRenderSettings();
 });
 
