@@ -4,11 +4,13 @@
 // Đầu vào: danh sách bệnh nhân trong ngày (chỉ cần STT + Họ tên) + cấu hình
 // (nhân sự, máy móc, loại thủ thuật, ca làm việc).
 //
-// Phác đồ chuẩn (mặc định cho mọi bệnh nhân, trừ khi ép combo khác):
-//   Bước A: Xoa bóp bấm huyệt (XBBH)               — cố định
-//   Bước B: Điện châm (DC) ưu tiên, dự phòng Hào châm (HC) khi hết máy/chỗ
-//   Bước C: Thủy châm (TC)                          — cố định
-//   Bước D: Xông hơi (XH) ưu tiên, dự phòng Cứu ngải (CN) khi hết máy/chỗ
+// Phác đồ chuẩn (mặc định cho mọi bệnh nhân, trừ khi ép combo khác) — gồm 4
+// bước, THỨ TỰ HOÀN TOÀN LINH HOẠT (kể cả Xoa bóp bấm huyệt), để có thể xếp
+// Xông hơi ngay từ đầu ca khi máy còn rảnh thay vì luôn phải xoa bóp trước:
+//   Xoa bóp bấm huyệt (XBBH)
+//   Điện châm (DC) ưu tiên, dự phòng Hào châm (HC) khi hết máy/chỗ
+//   Thủy châm (TC)
+//   Xông hơi (XH) ưu tiên, dự phòng Cứu ngải (CN) khi hết máy/chỗ
 //
 // Quy tắc tối ưu cốt lõi:
 //   1. Luôn tận dụng tối đa công suất máy Xông trước khi chuyển bệnh nhân
@@ -427,24 +429,19 @@ function generateSchedule(config, patients) {
     let usedStep4 = null; // 'XH' | 'CN'
     const missing = [];
 
-    // Bước A: Xoa bóp bấm huyệt (cố định, không có biến thể)
-    {
-      const proc = procByCode.XBBH;
-      const plan = planSimpleProcedure(proc, patientState.cursor);
-      if (plan) {
-        commitSimple(proc, plan, patientState);
-      } else {
-        missing.push(proc.code);
-      }
-    }
-
-    // Bước B + D còn linh hoạt thứ tự: lặp tối đa 2 lần, mỗi lần chọn bước
-    // nào cho kết quả hoàn thành sớm nhất (có thiên hướng ưu tiên máy).
+    // Cả 4 bước đều linh hoạt thứ tự — kể cả Xoa bóp bấm huyệt (step1) —
+    // để có thể xếp Xông hơi ngay từ đầu ca khi máy còn rảnh, thay vì luôn
+    // bắt bệnh nhân xoa bóp trước rồi mới tới lượt xông.
     const pendingFlexSteps = ['step2', 'step4'];
+    let step1Done = false;
+    let step3Done = false;
 
     // Kiểm tra THẬT (không ước lượng) xem, nếu bệnh nhân rảnh từ `cursorAfter`
     // trở đi, các bước CÒN LẠI (trừ bước đang xét) có còn xếp được không.
     function otherStepsStillFeasible(excludeKey, cursorAfter) {
+      if (excludeKey !== 'step1' && !step1Done) {
+        if (!planSimpleProcedure(procByCode.XBBH, cursorAfter)) return false;
+      }
       if (excludeKey !== 'step2' && pendingFlexSteps.includes('step2')) {
         const okDC = (!forceStep2 || forceStep2 === 'DC') && !!planSplitProcedure(procByCode.DC, cursorAfter, fixedMonitorFor(procByCode.DC));
         const okHC = (!forceStep2 || forceStep2 === 'HC') && !!planSplitProcedure(procByCode.HC, cursorAfter, fixedMonitorFor(procByCode.HC));
@@ -461,10 +458,13 @@ function generateSchedule(config, patients) {
       return true;
     }
 
-    let step3Done = false;
-    while (pendingFlexSteps.length > 0 || !step3Done) {
+    while (!step1Done || pendingFlexSteps.length > 0 || !step3Done) {
       const options = [];
 
+      if (!step1Done) {
+        const plan = planSimpleProcedure(procByCode.XBBH, patientState.cursor);
+        if (plan) options.push({ key: 'step1', finish: plan.end, choice: { plan, usedPrimary: true } });
+      }
       if (pendingFlexSteps.includes('step2')) {
         let primaryPlan = null;
         let fallbackPlan = null;
@@ -504,6 +504,7 @@ function generateSchedule(config, patients) {
 
       if (options.length === 0) {
         // không còn bước nào xếp được nữa trong ngày -> đánh dấu các bước còn thiếu
+        if (!step1Done) missing.push('XBBH');
         if (pendingFlexSteps.includes('step2')) missing.push(forceStep2 || 'DC/HC');
         if (pendingFlexSteps.includes('step4')) missing.push(forceStep4 || 'XH/CN');
         if (!step3Done) missing.push('TC');
@@ -513,7 +514,10 @@ function generateSchedule(config, patients) {
       options.sort((a, b) => a.finish - b.finish);
       const winner = options[0];
 
-      if (winner.key === 'step2') {
+      if (winner.key === 'step1') {
+        commitSimple(procByCode.XBBH, winner.choice.plan, patientState);
+        step1Done = true;
+      } else if (winner.key === 'step2') {
         const procCode = winner.choice.usedPrimary ? (forceStep2 || 'DC') : (forceStep2 ? (forceStep2 === 'DC' ? 'HC' : 'DC') : 'HC');
         const proc = procByCode[procCode];
         commitSplit(proc, winner.choice.plan, patientState);
