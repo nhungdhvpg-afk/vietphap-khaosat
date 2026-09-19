@@ -690,6 +690,34 @@ function generateSchedule(config, patients) {
     count: scheduleEntries.reduce((n, e) => n + (e.procedureCode === p.code ? 1 : 0), 0),
   }));
 
+  // ---- Tự kiểm tra: KHÔNG được có 1 nhân sự bị gán 2 việc "thực hiện"/"trông
+  // cố định" chồng giờ nhau (2 người cùng "trông" 1 loại thủ thuật cùng lúc là
+  // BÌNH THƯỜNG — đó là mô hình sức chứa). Đây là lưới an toàn cuối cùng: nếu
+  // có bug nào đó lọt qua khiến 2 việc thật sự chồng giờ, NÉM LỖI NGAY thay vì
+  // âm thầm trả về 1 lịch sai — để không bao giờ lặp lại tình huống người dùng
+  // phải tự phát hiện xung đột qua việc đọc phiếu in.
+  {
+    const byStaff = new Map();
+    for (const e of scheduleEntries) {
+      for (const a of e.staffAssignments) {
+        if (!byStaff.has(a.staffId)) byStaff.set(a.staffId, []);
+        byStaff.get(a.staffId).push({ start: a.start, end: a.end, roleType: a.roleType, patientId: e.patientId, procedureCode: e.procedureCode });
+      }
+    }
+    for (const [staffId, intervals] of byStaff) {
+      const sorted = intervals.slice().sort((a, b) => a.start - b.start);
+      for (let i = 0; i < sorted.length - 1; i++) {
+        for (let j = i + 1; j < sorted.length; j++) {
+          const a = sorted[i];
+          const b = sorted[j];
+          if (b.start >= a.end - MINUTE_EPS) break; // đã sort theo start -> không còn chồng lấn nữa
+          if (a.roleType === 'monitor' && b.roleType === 'monitor') continue; // nhiều người cùng trông 1 lúc là bình thường
+          throw new Error(`Lỗi chia lịch: nhân sự ${staffId} bị gán chồng giờ (${a.procedureCode} BN${a.patientId} ${minutesToHHMM(a.start)}-${minutesToHHMM(a.end)} vs ${b.procedureCode} BN${b.patientId} ${minutesToHHMM(b.start)}-${minutesToHHMM(b.end)}).`);
+        }
+      }
+    }
+  }
+
   return {
     scheduleEntries,
     warnings,
