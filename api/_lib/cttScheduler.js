@@ -132,7 +132,17 @@ function generateSchedule(config, patients) {
   for (const s of staff.filter((s) => s.active !== false && !fixedMonitorStaffIds.has(s.id))) {
     if (staffByRole[s.role]) staffByRole[s.role].push(s);
   }
-  const staffPoolForRoles = (roles) => roles.flatMap((r) => staffByRole[r] || []);
+  // Luôn ưu tiên gọi BS trước YS trước DD, BẤT KỂ thứ tự vai trò được liệt kê
+  // trong cấu hình — vì trong thực tế chỉ Y sĩ/Điều dưỡng được làm Xông hơi
+  // (perform_roles của XH không có BS), nên YS là nguồn lực khan hiếm cần
+  // dành riêng cho việc đó. Nếu để 1 thủ thuật khác (VD Cứu ngải) vô tình gọi
+  // YS trước dù BS (nguồn lực dồi dào hơn) cũng làm được, sẽ làm giảm oan số
+  // lượt Xông hơi thực hiện được trong ngày.
+  const ROLE_PRIORITY = ['BS', 'YS', 'DD'];
+  const staffPoolForRoles = (roles) => {
+    const roleSet = new Set(roles);
+    return ROLE_PRIORITY.filter((r) => roleSet.has(r)).flatMap((r) => staffByRole[r] || []);
+  };
 
   // ---- Trạng thái tài nguyên dùng chung trong suốt quá trình xếp lịch ----
   const staffBusy = new Map(staff.map((s) => [s.id, []])); // độc chiếm (đang thực hiện thủ thuật)
@@ -337,7 +347,9 @@ function generateSchedule(config, patients) {
   function commitSimple(proc, plan, patientState) {
     addStaffBusy(plan.staffId, plan.start, plan.end);
     if (plan.machineId) {
-      machineBusy.get(plan.machineId).push({ start: plan.start, end: plan.end + (proc.rest_after_minutes || 0) });
+      // "Nghỉ sau" (VD Xông hơi 15') là BỆNH NHÂN cần nghỉ trước khi sang
+      // bước kế tiếp — máy được dùng ngay cho người khác, không bị khoá.
+      machineBusy.get(plan.machineId).push({ start: plan.start, end: plan.end });
       machineUsedMinutes.set(plan.machineId, (machineUsedMinutes.get(plan.machineId) || 0) + (plan.end - plan.start));
     }
     scheduleEntries.push({
@@ -348,7 +360,7 @@ function generateSchedule(config, patients) {
       end: plan.end,
       staffAssignments: [{ staffId: plan.staffId, start: plan.start, end: plan.end, roleType: 'performer' }],
     });
-    patientState.cursor = Math.max(patientState.cursor, plan.end + transferBufferMinutes);
+    patientState.cursor = Math.max(patientState.cursor, plan.end + (proc.rest_after_minutes || 0) + transferBufferMinutes);
   }
 
   function commitSplit(proc, plan, patientState) {
@@ -356,7 +368,8 @@ function generateSchedule(config, patients) {
     const mKey = monitorKey(proc) + ':' + plan.monitorStaffId;
     getMonitorIntervals(mKey).push({ start: plan.monitorStart, end: plan.monitorEnd });
     if (plan.machineId) {
-      machineBusy.get(plan.machineId).push({ start: plan.start, end: plan.end + (proc.rest_after_minutes || 0) });
+      // Xem ghi chú ở commitSimple: "nghỉ sau" thuộc về bệnh nhân, không khoá máy.
+      machineBusy.get(plan.machineId).push({ start: plan.start, end: plan.end });
       machineUsedMinutes.set(plan.machineId, (machineUsedMinutes.get(plan.machineId) || 0) + (plan.end - plan.start));
     }
     const staffAssignments = [
@@ -372,25 +385,25 @@ function generateSchedule(config, patients) {
       end: plan.end,
       staffAssignments,
     });
-    patientState.cursor = Math.max(patientState.cursor, plan.end + transferBufferMinutes);
+    patientState.cursor = Math.max(patientState.cursor, plan.end + (proc.rest_after_minutes || 0) + transferBufferMinutes);
   }
 
   function fixedMonitorFor(proc) {
     return proc.fixed_monitor_staff_id || null;
   }
 
-  /** Với 1 lượt "khe co dãn" (VD bước Điện châm/Hào châm), tính phương án tốt
-   * nhất đồng thời áp dụng thiên hướng ưu tiên phương án "chính" (dùng máy)
-   * hơn phương án "dự phòng", TRỪ khi chờ phương án chính khiến bệnh nhân
-   * không kịp hoàn tất các bước còn lại trong ca. */
-  function chooseBiasedOption(primaryPlan, fallbackPlan, notBefore, remainingDurationAfterThis) {
+  /** Với 1 lượt "khe co dãn" (VD Điện châm/Hào châm, hoặc Xông hơi/Cứu ngải),
+   * ưu tiên phương án "chính" (dùng máy — Điện châm/Xông hơi) hơn "dự phòng",
+   * NHƯNG chỉ khi chọn phương án chính không làm hỏng khả năng hoàn tất các
+   * bước còn lại của bệnh nhân. Dùng `checkStillFeasible(cursorAfter)` — thử
+   * THẬT (không heuristic phỏng đoán thời lượng) xem các bước còn lại có còn
+   * xếp được không nếu bệnh nhân rảnh từ `cursorAfter` — để không bỏ lỡ máy
+   * Xông/Châm còn trống chỉ vì ước lượng sai. */
+  function chooseBiasedOption(primaryPlan, fallbackPlan, checkStillFeasible) {
     if (!primaryPlan && !fallbackPlan) return null;
     if (!fallbackPlan) return { plan: primaryPlan, usedPrimary: true };
     if (!primaryPlan) return { plan: fallbackPlan, usedPrimary: false };
-    // Ca hiện tại (dựa theo notBefore) còn bao nhiêu thời gian?
-    const shift = activeShifts.find((s) => notBefore >= s.start - MINUTE_EPS && notBefore <= s.end + MINUTE_EPS) || activeShifts[activeShifts.length - 1];
-    const latestSafeStart = shift.end - remainingDurationAfterThis;
-    if (primaryPlan.start <= latestSafeStart + MINUTE_EPS) {
+    if (checkStillFeasible(primaryPlan.end + transferBufferMinutes)) {
       return { plan: primaryPlan, usedPrimary: true };
     }
     return { plan: fallbackPlan, usedPrimary: false };
@@ -428,17 +441,31 @@ function generateSchedule(config, patients) {
     // Bước B + D còn linh hoạt thứ tự: lặp tối đa 2 lần, mỗi lần chọn bước
     // nào cho kết quả hoàn thành sớm nhất (có thiên hướng ưu tiên máy).
     const pendingFlexSteps = ['step2', 'step4'];
-    // ước lượng thời lượng còn lại tối thiểu cho từng bước để tính latestSafeStart
-    const minDurStep2 = Math.min(procByCode.DC.duration_minutes, procByCode.HC.duration_minutes);
-    const minDurStep4 = Math.min(procByCode.XH.duration_minutes, procByCode.CN.duration_minutes);
-    const minDurTC = procByCode.TC.duration_minutes;
+
+    // Kiểm tra THẬT (không ước lượng) xem, nếu bệnh nhân rảnh từ `cursorAfter`
+    // trở đi, các bước CÒN LẠI (trừ bước đang xét) có còn xếp được không.
+    function otherStepsStillFeasible(excludeKey, cursorAfter) {
+      if (excludeKey !== 'step2' && pendingFlexSteps.includes('step2')) {
+        const okDC = (!forceStep2 || forceStep2 === 'DC') && !!planSplitProcedure(procByCode.DC, cursorAfter, fixedMonitorFor(procByCode.DC));
+        const okHC = (!forceStep2 || forceStep2 === 'HC') && !!planSplitProcedure(procByCode.HC, cursorAfter, fixedMonitorFor(procByCode.HC));
+        if (!okDC && !okHC) return false;
+      }
+      if (excludeKey !== 'step4' && pendingFlexSteps.includes('step4')) {
+        const okXH = (!forceStep4 || forceStep4 === 'XH') && !!planSimpleProcedure(procByCode.XH, cursorAfter);
+        const okCN = (!forceStep4 || forceStep4 === 'CN') && !!planSimpleProcedure(procByCode.CN, cursorAfter);
+        if (!okXH && !okCN) return false;
+      }
+      if (excludeKey !== 'step3' && !step3Done) {
+        if (!planSplitProcedure(procByCode.TC, cursorAfter, fixedMonitorFor(procByCode.TC))) return false;
+      }
+      return true;
+    }
 
     let step3Done = false;
     while (pendingFlexSteps.length > 0 || !step3Done) {
       const options = [];
 
       if (pendingFlexSteps.includes('step2')) {
-        const remainingAfter = (pendingFlexSteps.includes('step4') ? minDurStep4 : 0) + (!step3Done ? minDurTC : 0);
         let primaryPlan = null;
         let fallbackPlan = null;
         if (!forceStep2 || forceStep2 === 'DC') {
@@ -449,13 +476,12 @@ function generateSchedule(config, patients) {
         }
         const choice = forceStep2
           ? (forceStep2 === 'DC' ? (primaryPlan && { plan: primaryPlan, usedPrimary: true }) : (fallbackPlan && { plan: fallbackPlan, usedPrimary: false }))
-          : chooseBiasedOption(primaryPlan, fallbackPlan, patientState.cursor, remainingAfter);
+          : chooseBiasedOption(primaryPlan, fallbackPlan, (cursorAfter) => otherStepsStillFeasible('step2', cursorAfter));
         if (choice) {
           options.push({ key: 'step2', finish: choice.plan.end, choice });
         }
       }
       if (pendingFlexSteps.includes('step4')) {
-        const remainingAfter = (pendingFlexSteps.includes('step2') ? minDurStep2 : 0) + (!step3Done ? minDurTC : 0);
         let primaryPlan = null;
         let fallbackPlan = null;
         if (!forceStep4 || forceStep4 === 'XH') {
@@ -466,13 +492,12 @@ function generateSchedule(config, patients) {
         }
         const choice = forceStep4
           ? (forceStep4 === 'XH' ? (primaryPlan && { plan: primaryPlan, usedPrimary: true }) : (fallbackPlan && { plan: fallbackPlan, usedPrimary: false }))
-          : chooseBiasedOption(primaryPlan, fallbackPlan, patientState.cursor, remainingAfter);
+          : chooseBiasedOption(primaryPlan, fallbackPlan, (cursorAfter) => otherStepsStillFeasible('step4', cursorAfter));
         if (choice) {
           options.push({ key: 'step4', finish: choice.plan.end, choice });
         }
       }
       if (!step3Done) {
-        const remainingAfter = (pendingFlexSteps.includes('step2') ? minDurStep2 : 0) + (pendingFlexSteps.includes('step4') ? minDurStep4 : 0);
         const plan = planSplitProcedure(procByCode.TC, patientState.cursor, fixedMonitorFor(procByCode.TC));
         if (plan) options.push({ key: 'step3', finish: plan.end, choice: { plan, usedPrimary: true } });
       }
