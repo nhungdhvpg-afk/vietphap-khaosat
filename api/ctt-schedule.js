@@ -67,7 +67,7 @@ module.exports = async (req, res) => {
         const patient = patients.find((p) => p.id === s.patient_id);
         let entry = acc.find((w) => w.patientId === s.patient_id);
         if (!entry) {
-          entry = { patientId: s.patient_id, patientName: patient?.name, stt: patient?.stt, missingSteps: [] };
+          entry = { patientId: s.patient_id, patientName: patient?.name, stt: patient?.stt, missingSteps: [], reason: s.unassigned_reason || null };
           acc.push(entry);
         }
         entry.missingSteps.push(procById[s.procedure_type_id]?.code || '?');
