@@ -238,8 +238,8 @@ function renderResults(containerSel, result) {
   }
 
   if ((result.warnings || []).length > 0) {
-    html += `<div class="panel"><h3>⚠ Bệnh nhân chưa xếp đủ phác đồ</h3><table><thead><tr><th>STT</th><th>Họ tên</th><th>Thiếu bước</th></tr></thead><tbody>
-      ${result.warnings.map((w) => `<tr><td>${w.stt}</td><td>${escapeHtml(w.patientName)}</td><td><span class="pill pill-warn">${w.missingSteps.join(', ')}</span></td></tr>`).join('')}
+    html += `<div class="panel" style="border:2px solid #d33;"><h3>⚠ Bệnh nhân VƯỢT KHUNG GIỜ — cần hẹn chuyển sang ngày khác</h3><table><thead><tr><th>STT</th><th>Họ tên</th><th>Thiếu bước</th><th>Lý do</th></tr></thead><tbody>
+      ${result.warnings.map((w) => `<tr><td>${w.stt}</td><td>${escapeHtml(w.patientName)}</td><td><span class="pill pill-warn">${w.missingSteps.join(', ')}</span></td><td><span class="pill pill-warn">Chuyển ngày hôm sau</span> ${escapeHtml(w.reason || '')}</td></tr>`).join('')}
     </tbody></table></div>`;
   }
 
@@ -345,11 +345,13 @@ function exportExcel(result) {
   const entries = (result.scheduleEntries || []).slice().sort((a, b) => a.start - b.start);
   const patients = (result.patients || []).slice().sort((a, b) => a.stt - b.stt);
 
+  const warningByPatientId = new Map((result.warnings || []).map((w) => [w.patientId, w]));
   const sheetPatient = [['STT', 'Họ tên', 'Combo', 'Thủ thuật', 'Bắt đầu', 'Kết thúc', 'Máy', 'Nhân viên']];
   for (const p of patients) {
     const myEntries = entries.filter((e) => e.patientId === p.id);
     if (myEntries.length === 0) {
-      sheetPatient.push([p.stt, p.name, '', 'CHƯA XẾP ĐƯỢC', '', '', '', '']);
+      const w = warningByPatientId.get(p.id);
+      sheetPatient.push([p.stt, p.name, '', 'VƯỢT KHUNG GIỜ — CHUYỂN NGÀY HÔM SAU', '', '', '', w ? `Thiếu: ${w.missingSteps.join(', ')}. ${w.reason || ''}` : '']);
     }
     for (const e of myEntries) {
       const staffCol = e.staffAssignments.map((a) => {

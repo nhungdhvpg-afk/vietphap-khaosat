@@ -122,7 +122,7 @@ module.exports = async (req, res) => {
           start_time: 0,
           end_time: 0,
           status: 'unassigned',
-          unassigned_reason: 'Hết giờ ca hoặc hết tài nguyên (máy/nhân sự) khả dụng trong ngày.',
+          unassigned_reason: w.reason || 'Hết giờ ca hoặc hết tài nguyên (máy/nhân sự) khả dụng trong ngày.',
         }));
       });
       if (unassignedRows.length) {

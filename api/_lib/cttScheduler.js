@@ -438,6 +438,11 @@ function generateSchedule(config, patients) {
   const sortedPatients = patients.slice().sort((a, b) => a.stt - b.stt);
   const procByCode = Object.fromEntries(Object.values(procedures).map((p) => [p.code, p]));
 
+  // Nhãn khung giờ ca hôm nay (VD "07:01-11:30 & 13:31-17:00") để ghi rõ vào
+  // lý do cảnh báo — bệnh nhân trong `warnings` LUÔN là người đã thử HẾT mọi
+  // buổi trong ngày mà vẫn không đủ chỗ hoàn tất phác đồ trong khung giờ này.
+  const shiftLabel = shifts.map((s) => `${minutesToHHMM(s.start)}-${minutesToHHMM(s.end)}`).join(' & ');
+
   /** Thử xếp đủ 4 bước cho 1 bệnh nhân, CHỈ TRONG PHẠM VI 1 buổi (shiftWindow).
    * Trả về { ok, missing, comboCode }. Không tự rollback — bên gọi (vòng lặp
    * chính) chịu trách nhiệm chụp/khôi phục trạng thái quanh lời gọi này. */
@@ -636,7 +641,13 @@ function generateSchedule(config, patients) {
 
   function finalizePatientOutcome(patient, outcome) {
     if (!outcome.ok) {
-      warnings.push({ patientId: patient.id, patientName: patient.name, stt: patient.stt, missingSteps: outcome.missing });
+      warnings.push({
+        patientId: patient.id,
+        patientName: patient.name,
+        stt: patient.stt,
+        missingSteps: outcome.missing,
+        reason: `Vượt khung giờ ca trong ngày (${shiftLabel}) — không còn đủ chỗ (máy/nhân sự) để hoàn tất phác đồ hôm nay. Cần hẹn chuyển sang ngày khác.`,
+      });
     } else if (outcome.comboCode) {
       comboCount[outcome.comboCode] = (comboCount[outcome.comboCode] || 0) + 1;
     }
