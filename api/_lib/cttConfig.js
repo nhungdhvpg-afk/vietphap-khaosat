@@ -62,9 +62,21 @@ async function loadCttConfig() {
   const staff = (staffRows || []).map((s) => ({ id: s.id, name: s.name, role: s.role, active: s.active, qualification: s.qualification, note: s.note }));
   const machines = (machineRows || []).map((m) => ({ id: m.id, name: m.name, type: m.type, active: m.active }));
 
+  // Cảnh báo trùng tên nhân sự ĐANG HOẠT ĐỘNG: nếu 2 người khác nhau (2 id
+  // khác nhau) trong danh sách lại trùng TÊN HIỂN THỊ, thuật toán vẫn xếp
+  // đúng theo từng id riêng biệt (không xung đột thật), nhưng báo cáo/phiếu
+  // in ra sẽ HIỂN THỊ như thể 1 người bị xếp trùng giờ — dễ gây hiểu nhầm là
+  // lỗi chia lịch. Phát hiện sớm để sửa dữ liệu (đổi tên phân biệt, VD thêm
+  // ký tự lót) thay vì tưởng nhầm là bug thuật toán.
+  const activeStaff = staff.filter((s) => s.active);
+  const nameCounts = new Map();
+  for (const s of activeStaff) nameCounts.set(s.name, (nameCounts.get(s.name) || 0) + 1);
+  const duplicateStaffNames = Array.from(nameCounts.entries()).filter(([, n]) => n > 1).map(([name]) => name);
+
   return {
-    schedulerConfig: { shifts, transferBufferMinutes, procedures, staff: staff.filter((s) => s.active), machines: machines.filter((m) => m.active), comboLabels, optimizationMode },
+    schedulerConfig: { shifts, transferBufferMinutes, procedures, staff: activeStaff, machines: machines.filter((m) => m.active), comboLabels, optimizationMode },
     raw: { staff, machines, procedures: procRows || [], combos: comboRows || [], settings: settingRows || [], fixedMonitor: fixedMonitorRows || [] },
+    duplicateStaffNames,
   };
 }
 
