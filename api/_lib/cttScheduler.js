@@ -117,8 +117,13 @@ function minutesToHHMM(mins) {
 function generateSchedule(config, patients) {
   const { shifts, transferBufferMinutes = 2, procedures, staff, machines, comboLabels = {} } = config;
 
+  // Nhân sự được gán "trông cố định" 1 thủ thuật (VD Vi Thị Hoá -> Thủy châm)
+  // được xem là ĐÃ CÓ VIỆC TOÀN THỜI GIAN — không được kéo đi làm việc khác
+  // (Xoa bóp bấm huyệt, Xông hơi, Cứu ngải...) kẻo hết giờ trông cho các bệnh
+  // nhân đến sau, gây thiếu người trông hàng loạt.
+  const fixedMonitorStaffIds = new Set(Object.values(procedures).map((p) => p.fixed_monitor_staff_id).filter(Boolean));
   const staffByRole = { BS: [], YS: [], DD: [] };
-  for (const s of staff.filter((s) => s.active !== false)) {
+  for (const s of staff.filter((s) => s.active !== false && !fixedMonitorStaffIds.has(s.id))) {
     if (staffByRole[s.role]) staffByRole[s.role].push(s);
   }
   const staffPoolForRoles = (roles) => roles.flatMap((r) => staffByRole[r] || []);
@@ -151,6 +156,18 @@ function generateSchedule(config, patients) {
       if (key.endsWith(':' + staffId)) intervals.push(...list);
     }
     return intervals;
+  }
+  /** 1 nhân sự có thực sự rảnh trọn vẹn khoảng [start,end] hay không (khoảng
+   * đó phải nằm gọn trong 1 ca làm việc và không chồng lịch bận nào khác). */
+  function isStaffFreeAt(staffId, start, end) {
+    if (start < -MINUTE_EPS) return false;
+    const inShift = shifts.some((s) => start >= s.start - MINUTE_EPS && end <= s.end + MINUTE_EPS);
+    if (!inShift) return false;
+    return !overlapsAny(staffOccupiedIntervals(staffId), start, end);
+  }
+  function findFreeStaffAt(pool, start, end) {
+    for (const s of pool) if (isStaffFreeAt(s.id, start, end)) return s.id;
+    return null;
   }
 
   const scheduleEntries = [];
@@ -201,57 +218,87 @@ function generateSchedule(config, patients) {
 
   /** Thử xếp 1 thủ thuật CHIA ĐÔI (tay nghề + theo dõi), có thể cần máy.
    * Người theo dõi có thể là 1 người cố định (fixedMonitorId) hoặc bất kỳ ai
-   * trong monitor_roles, dùng mô hình "sức chứa" monitor_max_patients. */
+   * trong monitor_roles, dùng mô hình "sức chứa" monitor_max_patients.
+   *
+   * QUAN TRỌNG: không được chỉ thử ĐÚNG 1 mốc giờ rồi bỏ cuộc nếu người theo
+   * dõi bận lúc đó — vì người thực hiện (BS/YS) thường có nhiều lựa chọn thay
+   * thế trong khi người theo dõi (đặc biệt là người cố định như Vi Thị Hoá /
+   * Đỗ Văn Thắng) là tài nguyên khan hiếm hơn. Vì vậy ta duyệt qua các mốc
+   * giờ mà người theo dõi CÓ THỂ rảnh (dựa trên lịch theo dõi hiện có của họ),
+   * rồi mới tìm người thực hiện rảnh đúng khớp mốc đó — đảm bảo không bỏ sót
+   * phương án khả thi chỉ vì thử sai thứ tự. */
   function planSplitProcedure(proc, notBefore, fixedMonitorStaffId) {
     const performPool = staffPoolForRoles(proc.perform_roles);
     const activeDur = proc.active_minutes;
     const monitorDur = proc.monitor_minutes;
     const totalDur = proc.duration_minutes;
     const capacity = proc.monitor_max_patients;
-    const mKey = monitorKey(proc);
+    const monitorCandidateIds = fixedMonitorStaffId ? [fixedMonitorStaffId] : staffPoolForRoles(proc.monitor_roles || []).map((s) => s.id);
 
-    function tryFrom(notBeforeStart) {
-      if (proc.requires_machine) {
-        const candidateMachines = machinesByType[proc.machine_type] || [];
-        let best = null;
-        for (const machine of candidateMachines) {
-          const mBusy = machineBusy.get(machine.id) || [];
-          const mSlot = findEarliestSlot(mBusy, shifts, totalDur, notBeforeStart);
-          if (!mSlot) continue;
-          const performSlot = findEarliestStaffSlot(performPool, staffOccupiedIntervals, shifts, activeDur, mSlot.start);
-          if (!performSlot || performSlot.start !== mSlot.start) continue;
-          const monitorStart = mSlot.start + activeDur;
-          const monitorEnd = monitorStart + monitorDur;
-          // Người theo dõi (cố định hoặc chung vai trò) dùng mô hình "sức
-          // chứa" (capacity) trên hàng đợi riêng, KHÔNG dùng staffBusy — vì
-          // 1 điều dưỡng theo dõi đồng thời nhiều bệnh nhân được, không độc
-          // chiếm như người "thực hiện". Nếu là người trông CỐ ĐỊNH, còn phải
-          // đảm bảo họ không đang bận việc "thực hiện" khác đúng lúc này.
-          const monitorIntervalsKey = fixedMonitorStaffId ? mKey + ':' + fixedMonitorStaffId : mKey;
-          const monitorOk = capacityFits(getMonitorIntervals(monitorIntervalsKey), monitorStart, monitorEnd, capacity)
-            && (!fixedMonitorStaffId || !overlapsAny(staffOccupiedIntervals(fixedMonitorStaffId, monitorIntervalsKey), monitorStart, monitorEnd));
-          if (!monitorOk) continue;
-          const candidate = { start: mSlot.start, end: mSlot.end, machineId: machine.id, performStaffId: performSlot.staffId, monitorStart, monitorEnd };
-          if (!best || candidate.start < best.start) best = candidate;
+    if (proc.requires_machine) {
+      const candidateMachines = machinesByType[proc.machine_type] || [];
+      let best = null;
+      for (const machine of candidateMachines) {
+        const mBusy = machineBusy.get(machine.id) || [];
+        // Duyệt lần lượt các mốc máy có thể bắt đầu (không dừng lại ở mốc đầu
+        // tiên nếu mốc đó không tìm được người thực hiện + người trông phù hợp).
+        let t = notBefore;
+        for (let guard = 0; guard < 1000; guard++) {
+          const mSlot = findEarliestSlot(mBusy, shifts, totalDur, t);
+          if (!mSlot) break;
+          const performStaffId = findFreeStaffAt(performPool, mSlot.start, mSlot.start + activeDur);
+          if (performStaffId) {
+            const monitorStart = mSlot.start + activeDur;
+            const monitorEnd = monitorStart + monitorDur;
+            for (const monitorStaffId of monitorCandidateIds) {
+              const mKey = monitorKey(proc) + ':' + monitorStaffId;
+              if (capacityFits(getMonitorIntervals(mKey), monitorStart, monitorEnd, capacity) && !overlapsAny(staffOccupiedIntervals(monitorStaffId, mKey), monitorStart, monitorEnd)) {
+                const candidate = { start: mSlot.start, end: mSlot.end, machineId: machine.id, performStaffId, monitorStaffId, monitorStart, monitorEnd };
+                if (!best || candidate.start < best.start) best = candidate;
+                break;
+              }
+            }
+          }
+          if (best && best.machineId === machine.id) break; // đã có phương án tốt nhất trên máy này
+          t = mSlot.start + 1; // thử mốc kế tiếp trên cùng máy này
         }
-        return best;
       }
-      const performSlot = findEarliestStaffSlot(performPool, staffOccupiedIntervals, shifts, activeDur, notBeforeStart);
-      if (!performSlot) return null;
-      const monitorStart = performSlot.start + activeDur;
-      const monitorEnd = monitorStart + monitorDur;
-      const monitorIntervalsKeyNoMachine = fixedMonitorStaffId ? mKey + ':' + fixedMonitorStaffId : mKey;
-      const monitorIntervals = getMonitorIntervals(monitorIntervalsKeyNoMachine);
-      if (!capacityFits(monitorIntervals, monitorStart, monitorEnd, capacity)) return null;
-      if (fixedMonitorStaffId && overlapsAny(staffOccupiedIntervals(fixedMonitorStaffId, monitorIntervalsKeyNoMachine), monitorStart, monitorEnd)) return null;
-      // đảm bảo toàn bộ nằm trong 1 ca (performSlot đã đảm bảo active nằm
-      // trong ca; kiểm tra thêm end tổng không vượt ca đó)
-      const shift = shifts.find((s) => performSlot.start >= s.start - MINUTE_EPS && performSlot.start < s.end + MINUTE_EPS);
-      if (!shift || monitorEnd > shift.end + MINUTE_EPS) return null;
-      return { start: performSlot.start, end: monitorEnd, machineId: null, performStaffId: performSlot.staffId, monitorStart, monitorEnd };
+      return best;
     }
 
-    return tryFrom(notBefore);
+    // Không cần máy (TC, HC): tìm mốc SỚM NHẤT mà cả người theo dõi lẫn
+    // người thực hiện đều rảnh, xét từng người theo dõi khả dĩ.
+    let best = null;
+    for (const monitorStaffId of monitorCandidateIds) {
+      const mKey = monitorKey(proc) + ':' + monitorStaffId;
+      const monitorIntervals = getMonitorIntervals(mKey);
+      const candidateStarts = new Set([notBefore]);
+      for (const shift of shifts) candidateStarts.add(Math.max(notBefore, shift.start));
+      for (const iv of monitorIntervals) if (iv.end >= notBefore) candidateStarts.add(iv.end);
+      const sortedStarts = Array.from(candidateStarts).sort((a, b) => a - b);
+
+      for (const shift of shifts) {
+        let foundInShift = null;
+        for (const monitorStart of sortedStarts) {
+          if (monitorStart < notBefore - MINUTE_EPS || monitorStart < shift.start - MINUTE_EPS) continue;
+          const monitorEnd = monitorStart + monitorDur;
+          if (monitorEnd > shift.end + MINUTE_EPS) continue;
+          const performStart = monitorStart - activeDur;
+          if (performStart < shift.start - MINUTE_EPS) continue;
+          if (!capacityFits(monitorIntervals, monitorStart, monitorEnd, capacity)) continue;
+          if (overlapsAny(staffOccupiedIntervals(monitorStaffId, mKey), monitorStart, monitorEnd)) continue;
+          const performStaffId = findFreeStaffAt(performPool, performStart, monitorStart);
+          if (!performStaffId) continue;
+          foundInShift = { start: performStart, end: monitorEnd, machineId: null, performStaffId, monitorStaffId, monitorStart, monitorEnd };
+          break; // sortedStarts tăng dần -> mốc đầu tiên khớp là sớm nhất trong ca này
+        }
+        if (foundInShift) {
+          if (!best || foundInShift.start < best.start) best = foundInShift;
+          break; // ca sau chỉ muộn hơn, không cần xét tiếp cho người theo dõi này
+        }
+      }
+    }
+    return best;
   }
 
   function commitSimple(proc, plan, patientState) {
@@ -271,19 +318,19 @@ function generateSchedule(config, patients) {
     patientState.cursor = Math.max(patientState.cursor, plan.end + transferBufferMinutes);
   }
 
-  function commitSplit(proc, plan, patientState, fixedMonitorStaffId) {
+  function commitSplit(proc, plan, patientState) {
     addStaffBusy(plan.performStaffId, plan.start, plan.start + proc.active_minutes);
-    const mKey = fixedMonitorStaffId ? monitorKey(proc) + ':' + fixedMonitorStaffId : monitorKey(proc);
+    const mKey = monitorKey(proc) + ':' + plan.monitorStaffId;
     getMonitorIntervals(mKey).push({ start: plan.monitorStart, end: plan.monitorEnd });
     if (plan.machineId) {
       machineBusy.get(plan.machineId).push({ start: plan.start, end: plan.end + (proc.rest_after_minutes || 0) });
       machineUsedMinutes.set(plan.machineId, (machineUsedMinutes.get(plan.machineId) || 0) + (plan.end - plan.start));
     }
-    const staffAssignments = [{ staffId: plan.performStaffId, start: plan.start, end: plan.start + proc.active_minutes, roleType: 'performer' }];
-    if (fixedMonitorStaffId) {
-      staffAssignments.push({ staffId: fixedMonitorStaffId, start: plan.monitorStart, end: plan.monitorEnd, roleType: 'monitor' });
-      staffWorkMinutes.set(fixedMonitorStaffId, (staffWorkMinutes.get(fixedMonitorStaffId) || 0) + (plan.monitorEnd - plan.monitorStart));
-    }
+    const staffAssignments = [
+      { staffId: plan.performStaffId, start: plan.start, end: plan.start + proc.active_minutes, roleType: 'performer' },
+      { staffId: plan.monitorStaffId, start: plan.monitorStart, end: plan.monitorEnd, roleType: 'monitor' },
+    ];
+    staffWorkMinutes.set(plan.monitorStaffId, (staffWorkMinutes.get(plan.monitorStaffId) || 0) + (plan.monitorEnd - plan.monitorStart));
     scheduleEntries.push({
       patientId: patientState.id,
       procedureCode: proc.code,
@@ -407,7 +454,7 @@ function generateSchedule(config, patients) {
       if (winner.key === 'step2') {
         const procCode = winner.choice.usedPrimary ? (forceStep2 || 'DC') : (forceStep2 ? (forceStep2 === 'DC' ? 'HC' : 'DC') : 'HC');
         const proc = procByCode[procCode];
-        commitSplit(proc, winner.choice.plan, patientState, fixedMonitorFor(proc));
+        commitSplit(proc, winner.choice.plan, patientState);
         usedStep2 = procCode;
         pendingFlexSteps.splice(pendingFlexSteps.indexOf('step2'), 1);
       } else if (winner.key === 'step4') {
@@ -417,7 +464,7 @@ function generateSchedule(config, patients) {
         usedStep4 = procCode;
         pendingFlexSteps.splice(pendingFlexSteps.indexOf('step4'), 1);
       } else {
-        commitSplit(procByCode.TC, winner.choice.plan, patientState, fixedMonitorFor(procByCode.TC));
+        commitSplit(procByCode.TC, winner.choice.plan, patientState);
         step3Done = true;
       }
     }
