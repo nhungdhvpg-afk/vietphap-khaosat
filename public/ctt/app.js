@@ -218,6 +218,12 @@ function renderResults(containerSel, result) {
       ${Object.entries(summary.comboCount || {}).map(([code, n]) => `<div class="kpi"><div class="v">${n}</div><div class="l">Combo ${code}</div></div>`).join('')}
     </div></div>`;
 
+    if (summary.procedureCount) {
+      html += `<div class="panel"><h3>Số lượt từng thủ thuật</h3><div class="kpi-grid">
+        ${summary.procedureCount.map((p) => `<div class="kpi"><div class="v">${p.count}</div><div class="l">${escapeHtml(p.name)}</div></div>`).join('')}
+      </div></div>`;
+    }
+
     html += `<div class="panel"><h3>Hiệu suất máy</h3><table><thead><tr><th>Máy</th><th>Loại</th><th>Phút đã dùng</th><th>Hiệu suất</th></tr></thead><tbody>
       ${summary.machineUtilization.map((m) => `<tr><td>${escapeHtml(m.name)}</td><td>${m.type === 'XONG' ? 'Xông' : 'Châm'}</td><td>${m.usedMinutes}</td><td>${m.utilizationPct}%</td></tr>`).join('')}
     </tbody></table></div>`;

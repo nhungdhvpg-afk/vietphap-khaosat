@@ -74,7 +74,42 @@ module.exports = async (req, res) => {
         return acc;
       }, []);
 
-    res.status(200).json({ date, patients, scheduleEntries, warnings });
+    // Tổng hợp số liệu (giống hệt phần "Tổng quan" khi vừa chia mới), để tab
+    // "Xem lại theo ngày" cũng hiển thị được — trước đây thiếu hẳn phần này.
+    const totalPatients = patients.length;
+    const incompletePatients = warnings.length;
+    const comboCount = {};
+    const countedPatientIds = new Set();
+    for (const e of scheduleEntries) {
+      if (!e.comboCode || countedPatientIds.has(e.patientId)) continue;
+      countedPatientIds.add(e.patientId);
+      comboCount[e.comboCode] = (comboCount[e.comboCode] || 0) + 1;
+    }
+    const procedureCount = raw.procedures.map((p) => ({
+      code: p.code,
+      name: p.name,
+      count: scheduleEntries.reduce((n, e) => n + (e.procedureCode === p.code ? 1 : 0), 0),
+    }));
+    const machineUsedMinutes = {};
+    for (const e of scheduleEntries) {
+      if (!e.machineId) continue;
+      machineUsedMinutes[e.machineId] = (machineUsedMinutes[e.machineId] || 0) + (e.end - e.start);
+    }
+    const capacityMinutes = (() => {
+      const s1s = raw.settings.find((x) => x.key === 'shift1_start')?.value || '07:00';
+      const s1e = raw.settings.find((x) => x.key === 'shift1_end')?.value || '11:30';
+      const s2s = raw.settings.find((x) => x.key === 'shift2_start')?.value || '13:30';
+      const s2e = raw.settings.find((x) => x.key === 'shift2_end')?.value || '17:00';
+      const toMin = (t) => { const [h, m] = t.split(':').map(Number); return h * 60 + m; };
+      return (toMin(s1e) - toMin(s1s)) + (toMin(s2e) - toMin(s2s));
+    })();
+    const machineUtilization = raw.machines.map((m) => {
+      const used = machineUsedMinutes[m.id] || 0;
+      return { machineId: m.id, name: m.name, type: m.type, usedMinutes: used, capacityMinutes, utilizationPct: capacityMinutes ? Math.round((used / capacityMinutes) * 1000) / 10 : 0 };
+    });
+    const summary = { totalPatients, completedPatients: totalPatients - incompletePatients, incompletePatients, comboCount, procedureCount, machineUtilization };
+
+    res.status(200).json({ date, patients, scheduleEntries, warnings, summary });
   } catch (e) {
     console.error('ctt-schedule error', e);
     res.status(500).json({ error: 'Không tải được lịch.' });
