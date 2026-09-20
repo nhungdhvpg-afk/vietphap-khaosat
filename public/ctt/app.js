@@ -216,6 +216,17 @@ function staffNameOf(a) {
   const s = (currentConfig?.staff || []).find((x) => x.id === a.staffId);
   return s ? s.name : '?';
 }
+/** Tên máy (VD "Xông 1", "Châm 3") cho 1 lượt thủ thuật. Kết quả "Xem lại
+ * theo ngày" đã gắn sẵn `e.machineName`; kết quả "Chia thủ thuật" (vừa chia
+ * xong, chưa tải lại từ CSDL) chỉ có `e.machineId` nên phải tự tra cứu trong
+ * currentConfig.machines — thiếu bước này thì cột máy trống trơn ngay sau
+ * khi vừa bấm "Chia thủ thuật". */
+function machineNameOf(e) {
+  if (!e.machineId) return null;
+  if (e.machineName) return e.machineName;
+  const m = (currentConfig?.machines || []).find((x) => x.id === e.machineId);
+  return m ? m.name : '?';
+}
 function comboPillHtml(code) {
   if (!code) return '';
   const cls = code === 'C1' ? 'pill-c1' : (code === 'C2' ? 'pill-c2' : (code === 'C2B' ? 'pill-c2b' : 'pill-c3'));
@@ -280,7 +291,8 @@ function renderResults(containerSel, result) {
         const roleLabel = a.roleType === 'monitor' ? 'trông' : 'thực hiện';
         return `${escapeHtml(staffNameOf(a))} (${roleLabel} ${hhmm(a.start)}-${hhmm(a.end)})`;
       }).join(', ');
-      return `${hhmm(e.start)}-${hhmm(e.end)} <b>${procNameOf(e)}</b>${e.machineName ? ' (' + escapeHtml(e.machineName) + ')' : ''} — ${staffList}`;
+      const machineName = machineNameOf(e);
+      return `${hhmm(e.start)}-${hhmm(e.end)} <b>${procNameOf(e)}</b>${machineName ? ' (' + escapeHtml(machineName) + ')' : ''} — ${staffList}`;
     }).join('<br>');
     byPatientHtml += `<tr><td>${p.stt}</td><td>${escapeHtml(p.name)}</td><td>${comboPillHtml(combo)}</td><td>${detail || '<span class="muted">Chưa xếp được thủ thuật nào</span>'}</td></tr>`;
   }
@@ -292,7 +304,7 @@ function renderResults(containerSel, result) {
     for (const a of e.staffAssignments) {
       const key = a.staffId;
       if (!staffMap.has(key)) staffMap.set(key, []);
-      staffMap.get(key).push({ ...a, procedureCode: e.procedureCode, procName: procNameOf(e), patientId: e.patientId, machineName: e.machineName });
+      staffMap.get(key).push({ ...a, procedureCode: e.procedureCode, procName: procNameOf(e), patientId: e.patientId, machineName: machineNameOf(e) });
     }
   }
   let byStaffHtml = '<div class="panel"><h3>Theo nhân viên</h3>';
@@ -318,7 +330,7 @@ function renderResults(containerSel, result) {
   let byMachineHtml = '<div class="panel"><h3>Theo máy</h3>';
   for (const [machineId, list] of machineMap.entries()) {
     list.sort((a, b) => a.start - b.start);
-    const name = list[0].machineName || (currentConfig?.machines || []).find((m) => m.id === machineId)?.name || machineId;
+    const name = machineNameOf(list[0]) || machineId;
     byMachineHtml += `<div class="staff-block"><div class="hd"><span>${escapeHtml(name)}</span><span class="muted">${list.length} lượt</span></div><table><tbody>`;
     for (const e of list) {
       byMachineHtml += `<tr><td style="width:110px;">${hhmm(e.start)}-${hhmm(e.end)}</td><td>${procNameOf(e)}</td><td>BN: ${escapeHtml(patientNameOf(result, e.patientId))}</td></tr>`;
@@ -379,7 +391,7 @@ function exportExcel(result) {
         const roleLabel = a.roleType === 'monitor' ? 'trông' : 'thực hiện';
         return `${staffNameOf(a)} (${roleLabel} ${hhmm(a.start)}-${hhmm(a.end)})`;
       }).join(', ');
-      sheetPatient.push([p.stt, p.name, e.comboCode || '', procNameOf(e), hhmm(e.start), hhmm(e.end), e.machineName || '', staffCol]);
+      sheetPatient.push([p.stt, p.name, e.comboCode || '', procNameOf(e), hhmm(e.start), hhmm(e.end), machineNameOf(e) || '', staffCol]);
     }
   }
 
@@ -396,7 +408,7 @@ function exportExcel(result) {
   const sheetMachine = [['Máy', 'Bắt đầu', 'Kết thúc', 'Thủ thuật', 'Bệnh nhân']];
   for (const [machineId, list] of machineMap.entries()) {
     list.sort((a, b) => a.start - b.start);
-    const name = list[0].machineName || machineId;
+    const name = machineNameOf(list[0]) || machineId;
     for (const e of list) sheetMachine.push([name, hhmm(e.start), hhmm(e.end), procNameOf(e), patientNameOf(result, e.patientId)]);
   }
 
