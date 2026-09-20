@@ -28,20 +28,30 @@
 
 const MINUTE_EPS = 1e-6;
 
+// Khoảng đệm bắt buộc giữa lúc 1 người/1 máy vừa xong việc cho bệnh nhân này
+// và lúc bắt đầu việc cho bệnh nhân KẾ TIẾP trên đúng người/máy đó — không
+// được phép giờ kết thúc của người này trùng khít giờ bắt đầu của người sau
+// (VD: BN1 xong máy Xông lúc 07:38 thì BN2 dùng máy đó sớm nhất là 07:39).
+// Áp dụng đồng loạt cho MỌI thủ thuật/máy/nhân sự thực hiện — KHÔNG áp dụng
+// cho việc "theo dõi" nhiều bệnh nhân cùng lúc (sức chứa), vì đó vốn dĩ được
+// phép chồng giờ thật sự (1 điều dưỡng trông song song nhiều người).
+const RESOURCE_HANDOFF_MINUTES = 1;
+
 /** Tìm khoảng thời gian rảnh sớm nhất (>= notBefore) đủ `duration` phút, nằm
  * trọn trong 1 trong các khung ca `shifts`, không đụng các khoảng bận đã có
- * trong `busyIntervals` (mảng {start,end}, không cần sắp xếp trước). */
-function findEarliestSlot(busyIntervals, shifts, duration, notBefore) {
+ * trong `busyIntervals` (mảng {start,end}, không cần sắp xếp trước), CÁCH
+ * mỗi khoảng bận đó ít nhất `gap` phút (mặc định 0 = cho phép nối sát giờ). */
+function findEarliestSlot(busyIntervals, shifts, duration, notBefore, gap = 0) {
   const sorted = busyIntervals.slice().sort((a, b) => a.start - b.start);
   for (const shift of shifts) {
     let candidate = Math.max(notBefore, shift.start);
     if (candidate + duration > shift.end + MINUTE_EPS) continue; // không đủ chỗ trong ca này nữa
-    // Duyệt qua các khoảng bận nằm trong ca này, đẩy candidate tới sau mỗi khoảng chồng lấn.
+    // Duyệt qua các khoảng bận nằm trong ca này, đẩy candidate tới sau mỗi khoảng chồng lấn (cộng khoảng đệm).
     for (const busy of sorted) {
-      if (busy.end <= candidate) continue;
-      if (busy.start >= candidate + duration) break; // không còn chồng lấn nữa (đã sort)
-      // chồng lấn -> đẩy candidate ra sau khoảng bận này
-      candidate = busy.end;
+      if (busy.end + gap <= candidate + MINUTE_EPS) continue;
+      if (busy.start - gap >= candidate + duration - MINUTE_EPS) break; // không còn chồng lấn/đệm nữa (đã sort)
+      // chồng lấn (hoặc trong khoảng đệm) -> đẩy candidate ra sau khoảng bận này CỘNG khoảng đệm
+      candidate = busy.end + gap;
     }
     if (candidate + duration <= shift.end + MINUTE_EPS) {
       return { start: candidate, end: candidate + duration };
@@ -91,11 +101,11 @@ function findEarliestCapacitySlot(existingIntervals, shifts, duration, notBefore
  * BỘ khoảng thời gian người đó đang bận — kể cả lúc đang "theo dõi" một thủ
  * thuật khác (nếu là người giám sát cố định) — để không bị gán chồng 2 việc
  * cùng lúc. Trả về {staffId, start, end} hoặc null. */
-function findEarliestStaffSlot(staffPool, getBusy, shifts, duration, notBefore) {
+function findEarliestStaffSlot(staffPool, getBusy, shifts, duration, notBefore, gap = 0) {
   let best = null;
   for (const staff of staffPool) {
     const busy = getBusy(staff.id);
-    const slot = findEarliestSlot(busy, shifts, duration, notBefore);
+    const slot = findEarliestSlot(busy, shifts, duration, notBefore, gap);
     if (slot && (!best || slot.start < best.slot.start)) {
       best = { staff, slot };
     }
@@ -169,8 +179,8 @@ function generateSchedule(config, patients) {
     if (!monitorLoad.has(key)) monitorLoad.set(key, []);
     return monitorLoad.get(key);
   }
-  function overlapsAny(intervals, start, end) {
-    return intervals.some((iv) => iv.start < end - MINUTE_EPS && iv.end > start + MINUTE_EPS);
+  function overlapsAny(intervals, start, end, gap = 0) {
+    return intervals.some((iv) => iv.start - gap < end - MINUTE_EPS && iv.end + gap > start + MINUTE_EPS);
   }
   /** Toàn bộ khoảng bận thực sự của 1 nhân sự: đang "thực hiện" (staffBusy)
    * CỘNG với đang "theo dõi cố định" 1 thủ thuật khác (nếu họ là người giám
@@ -191,7 +201,7 @@ function generateSchedule(config, patients) {
     if (start < -MINUTE_EPS) return false;
     const inShift = activeShifts.some((s) => start >= s.start - MINUTE_EPS && end <= s.end + MINUTE_EPS);
     if (!inShift) return false;
-    return !overlapsAny(staffOccupiedIntervals(staffId), start, end);
+    return !overlapsAny(staffOccupiedIntervals(staffId), start, end, RESOURCE_HANDOFF_MINUTES);
   }
   function findFreeStaffAt(pool, start, end) {
     for (const s of pool) if (isStaffFreeAt(s.id, start, end)) return s.id;
@@ -249,16 +259,16 @@ function generateSchedule(config, patients) {
       let best = null;
       for (const machine of candidateMachines) {
         const mBusy = machineBusy.get(machine.id) || [];
-        const mSlot = findEarliestSlot(mBusy, activeShifts, proc.duration_minutes, notBefore);
+        const mSlot = findEarliestSlot(mBusy, activeShifts, proc.duration_minutes, notBefore, RESOURCE_HANDOFF_MINUTES);
         if (!mSlot) continue;
-        const staffSlot = findEarliestStaffSlot(pool, staffOccupiedIntervals, activeShifts, proc.duration_minutes, mSlot.start);
+        const staffSlot = findEarliestStaffSlot(pool, staffOccupiedIntervals, activeShifts, proc.duration_minutes, mSlot.start, RESOURCE_HANDOFF_MINUTES);
         if (!staffSlot || staffSlot.start !== mSlot.start) {
           // máy rảnh nhưng đúng lúc đó không có nhân sự -> thử khớp lại: lấy
           // mốc muộn hơn giữa máy và người, xếp lại cả hai từ mốc đó.
           const notBefore2 = staffSlot ? Math.max(mSlot.start, staffSlot.start) : null;
           if (notBefore2 == null) continue;
-          const mSlot2 = findEarliestSlot(mBusy, activeShifts, proc.duration_minutes, notBefore2);
-          const staffSlot2 = mSlot2 ? findEarliestStaffSlot(pool, staffOccupiedIntervals, activeShifts, proc.duration_minutes, mSlot2.start) : null;
+          const mSlot2 = findEarliestSlot(mBusy, activeShifts, proc.duration_minutes, notBefore2, RESOURCE_HANDOFF_MINUTES);
+          const staffSlot2 = mSlot2 ? findEarliestStaffSlot(pool, staffOccupiedIntervals, activeShifts, proc.duration_minutes, mSlot2.start, RESOURCE_HANDOFF_MINUTES) : null;
           if (!mSlot2 || !staffSlot2 || staffSlot2.start !== mSlot2.start) continue;
           const candidate = { start: mSlot2.start, end: mSlot2.end, machineId: machine.id, staffId: staffSlot2.staffId };
           if (!best || candidate.start < best.start) best = candidate;
@@ -269,7 +279,7 @@ function generateSchedule(config, patients) {
       }
       return best;
     }
-    const staffSlot = findEarliestStaffSlot(pool, staffOccupiedIntervals, activeShifts, proc.duration_minutes, notBefore);
+    const staffSlot = findEarliestStaffSlot(pool, staffOccupiedIntervals, activeShifts, proc.duration_minutes, notBefore, RESOURCE_HANDOFF_MINUTES);
     if (!staffSlot) return null;
     return { start: staffSlot.start, end: staffSlot.end, machineId: null, staffId: staffSlot.staffId };
   }
@@ -302,7 +312,7 @@ function generateSchedule(config, patients) {
         // tiên nếu mốc đó không tìm được người thực hiện + người trông phù hợp).
         let t = notBefore;
         for (let guard = 0; guard < 1000; guard++) {
-          const mSlot = findEarliestSlot(mBusy, activeShifts, totalDur, t);
+          const mSlot = findEarliestSlot(mBusy, activeShifts, totalDur, t, RESOURCE_HANDOFF_MINUTES);
           if (!mSlot) break;
           const performStaffId = findFreeStaffAt(performPool, mSlot.start, mSlot.start + activeDur);
           if (performStaffId) {
@@ -310,7 +320,7 @@ function generateSchedule(config, patients) {
             const monitorEnd = monitorStart + monitorDur;
             for (const monitorStaffId of monitorCandidateIds) {
               const mKey = monitorKey(proc) + ':' + monitorStaffId;
-              if (capacityFits(getMonitorIntervals(mKey), monitorStart, monitorEnd, capacity) && !overlapsAny(staffOccupiedIntervals(monitorStaffId, mKey), monitorStart, monitorEnd)) {
+              if (capacityFits(getMonitorIntervals(mKey), monitorStart, monitorEnd, capacity) && !overlapsAny(staffOccupiedIntervals(monitorStaffId, mKey), monitorStart, monitorEnd, RESOURCE_HANDOFF_MINUTES)) {
                 const candidate = { start: mSlot.start, end: mSlot.end, machineId: machine.id, performStaffId, monitorStaffId, monitorStart, monitorEnd };
                 if (!best || candidate.start < best.start) best = candidate;
                 break;
@@ -344,7 +354,7 @@ function generateSchedule(config, patients) {
           const performStart = monitorStart - activeDur;
           if (performStart < shift.start - MINUTE_EPS) continue;
           if (!capacityFits(monitorIntervals, monitorStart, monitorEnd, capacity)) continue;
-          if (overlapsAny(staffOccupiedIntervals(monitorStaffId, mKey), monitorStart, monitorEnd)) continue;
+          if (overlapsAny(staffOccupiedIntervals(monitorStaffId, mKey), monitorStart, monitorEnd, RESOURCE_HANDOFF_MINUTES)) continue;
           const performStaffId = findFreeStaffAt(performPool, performStart, monitorStart);
           if (!performStaffId) continue;
           foundInShift = { start: performStart, end: monitorEnd, machineId: null, performStaffId, monitorStaffId, monitorStart, monitorEnd };
