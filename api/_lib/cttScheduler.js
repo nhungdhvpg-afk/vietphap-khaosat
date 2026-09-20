@@ -343,6 +343,19 @@ function generateSchedule(config, patients) {
       const candidateStarts = new Set([notBefore]);
       for (const shift of activeShifts) candidateStarts.add(Math.max(notBefore, shift.start));
       for (const iv of monitorIntervals) if (iv.end >= notBefore) candidateStarts.add(iv.end);
+      // QUAN TRỌNG: cũng thử các mốc mà TỪNG người thực hiện khả dĩ vừa rảnh ra
+      // (không chỉ mốc người theo dõi rảnh) — nếu chỉ dựa vào lịch người theo
+      // dõi, lúc TẤT CẢ người thực hiện (VD toàn bộ BS, riêng Thủy châm chỉ
+      // BS được làm) đang bận đúng lúc `notBefore` thì thuật toán bỏ cuộc
+      // ngay lập tức dù họ sắp rảnh trong vài phút tới và ca vẫn còn thừa thời
+      // gian — đây chính là nguyên nhân khiến hệ thống kết luận nhầm "không
+      // đủ chỗ" và chọn Cứu ngải thay vì Xông hơi dù máy Xông vẫn còn rảnh.
+      for (const perf of performPool) {
+        for (const iv of staffOccupiedIntervals(perf.id)) {
+          const candidate = iv.end + RESOURCE_HANDOFF_MINUTES + activeDur;
+          if (candidate >= notBefore) candidateStarts.add(candidate);
+        }
+      }
       const sortedStarts = Array.from(candidateStarts).sort((a, b) => a - b);
 
       for (const shift of activeShifts) {
