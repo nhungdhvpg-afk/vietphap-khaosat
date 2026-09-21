@@ -60,6 +60,21 @@ module.exports = async (req, res) => {
           if (error) throw error;
           break;
         }
+        case 'delete_staff': {
+          const { id } = payload || {};
+          if (!id) {
+            res.status(400).json({ error: 'Thiếu id nhân sự.' });
+            return;
+          }
+          // Xoá hẳn (khác với bỏ tích "active" — chỉ tạm ngừng). Phân công
+          // "trông cố định" của người này (nếu có) tự bị xoá theo (FK
+          // on delete cascade); các lượt lịch sử đã chia trước đây vẫn giữ
+          // nguyên, chỉ mất liên kết tới người thực hiện (FK on delete set
+          // null) — không mất dữ liệu ngày/giờ/thủ thuật đã chia.
+          const { error } = await db.from('ctt_staff').delete().eq('id', id);
+          if (error) throw error;
+          break;
+        }
         case 'upsert_machine': {
           const { id, name, type, active } = payload || {};
           if (!name || !['XONG', 'CHAM'].includes(type)) {

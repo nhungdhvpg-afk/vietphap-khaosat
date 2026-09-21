@@ -37,6 +37,15 @@ const MINUTE_EPS = 1e-6;
 // phép chồng giờ thật sự (1 điều dưỡng trông song song nhiều người).
 const RESOURCE_HANDOFF_MINUTES = 1;
 
+// Chỉ có 1 bác sĩ khám (Mai Thị Thủy) khám tuần tự từng bệnh nhân rồi chỉ
+// định đi làm thủ thuật — không thể 2 người cùng bắt đầu làm thủ thuật cùng
+// lúc, vì khám xong người này (1 phút) mới khám tiếp người sau (1 phút nữa)
+// rồi mới chỉ định họ đi làm thủ thuật. Vậy nên mốc SỚM NHẤT bệnh nhân thứ
+// N (tính theo thứ tự vào khám trong CÙNG 1 buổi) được phép bắt đầu bất kỳ
+// bước nào phải cách bệnh nhân N-1 ít nhất 2 phút (VD BN1 07:01 -> BN2
+// 07:03 -> BN3 07:05...), khớp ví dụ CEO đưa ra.
+const EXAM_PACING_MINUTES = 2;
+
 /** Tìm khoảng thời gian rảnh sớm nhất (>= notBefore) đủ `duration` phút, nằm
  * trọn trong 1 trong các khung ca `shifts`, không đụng các khoảng bận đã có
  * trong `busyIntervals` (mảng {start,end}, không cần sắp xếp trước), CÁCH
@@ -340,8 +349,17 @@ function generateSchedule(config, patients) {
     for (const monitorStaffId of monitorCandidateIds) {
       const mKey = monitorKey(proc) + ':' + monitorStaffId;
       const monitorIntervals = getMonitorIntervals(mKey);
-      const candidateStarts = new Set([notBefore]);
-      for (const shift of activeShifts) candidateStarts.add(Math.max(notBefore, shift.start));
+      const candidateStarts = new Set([notBefore, notBefore + activeDur]);
+      for (const shift of activeShifts) {
+        const shiftFloor = Math.max(notBefore, shift.start);
+        candidateStarts.add(shiftFloor);
+        // Mốc "người thực hiện bắt đầu đúng lúc ca/notBefore cho phép sớm
+        // nhất" — nếu thiếu mốc này, khi notBefore > shift.start (VD do giãn
+        // cách khám EXAM_PACING_MINUTES) và chưa có ai từng đặt lịch trước đó
+        // (mảng bận rỗng), tập ứng viên có thể KHÔNG có mốc nào thoả performStart
+        // >= notBefore, khiến thuật toán kết luận nhầm "hết chỗ" dù ca còn trống.
+        candidateStarts.add(shiftFloor + activeDur);
+      }
       for (const iv of monitorIntervals) if (iv.end >= notBefore) candidateStarts.add(iv.end);
       // QUAN TRỌNG: cũng thử các mốc mà TỪNG người thực hiện khả dĩ vừa rảnh ra
       // (không chỉ mốc người theo dõi rảnh) — nếu chỉ dựa vào lịch người theo
@@ -365,7 +383,13 @@ function generateSchedule(config, patients) {
           const monitorEnd = monitorStart + monitorDur;
           if (monitorEnd > shift.end + MINUTE_EPS) continue;
           const performStart = monitorStart - activeDur;
-          if (performStart < shift.start - MINUTE_EPS) continue;
+          // Phải >= notBefore (không chỉ >= shift.start) — nếu không, khi
+          // notBefore lớn hơn shift.start (VD do khoảng cách giãn cách khám
+          // EXAM_PACING_MINUTES, hoặc cursor của bệnh nhân đã trôi qua vài
+          // bước trước đó), người thực hiện có thể bị đẩy bắt đầu SỚM HƠN cả
+          // notBefore — vi phạm đúng ràng buộc mà notBefore được truyền vào
+          // để đảm bảo.
+          if (performStart < notBefore - MINUTE_EPS) continue;
           if (!capacityFits(monitorIntervals, monitorStart, monitorEnd, capacity)) continue;
           if (overlapsAny(staffOccupiedIntervals(monitorStaffId, mKey), monitorStart, monitorEnd, RESOURCE_HANDOFF_MINUTES)) continue;
           const performStaffId = findFreeStaffAt(performPool, performStart, monitorStart);
@@ -467,15 +491,19 @@ function generateSchedule(config, patients) {
   const shiftLabel = shifts.map((s) => `${minutesToHHMM(s.start)}-${minutesToHHMM(s.end)}`).join(' & ');
 
   /** Thử xếp đủ 4 bước cho 1 bệnh nhân, CHỈ TRONG PHẠM VI 1 buổi (shiftWindow).
-   * Trả về { ok, missing, comboCode }. Không tự rollback — bên gọi (vòng lặp
-   * chính) chịu trách nhiệm chụp/khôi phục trạng thái quanh lời gọi này. */
-  function attemptPatientInShift(patient, shiftWindow) {
+   * `examFloor` là mốc SỚM NHẤT bệnh nhân này được phép bắt đầu BẤT KỲ bước
+   * nào — vì chỉ có 1 bác sĩ khám (Mai Thị Thủy) khám tuần tự từng người rồi
+   * mới chỉ định đi làm thủ thuật, người sau luôn phải chờ người trước khám
+   * xong (xem EXAM_PACING_MINUTES). Trả về { ok, missing, comboCode }. Không
+   * tự rollback — bên gọi (vòng lặp chính) chịu trách nhiệm chụp/khôi phục
+   * trạng thái quanh lời gọi này. */
+  function attemptPatientInShift(patient, shiftWindow, examFloor) {
     activeShifts = [shiftWindow];
     const comboOverride = patient.comboOverride && comboLabels[patient.comboOverride];
     const forceStep2 = comboOverride ? comboOverride.step2Code : null;
     const forceStep4 = comboOverride ? comboOverride.step4Code : null;
 
-    const patientState = { id: patient.id, cursor: shiftWindow.start };
+    const patientState = { id: patient.id, cursor: Math.max(shiftWindow.start, examFloor ?? shiftWindow.start) };
     let usedStep2 = null; // 'DC' | 'HC'
     let usedStep4 = null; // 'XH' | 'CN'
     const missing = [];
@@ -603,18 +631,30 @@ function generateSchedule(config, patients) {
     return { ok: missing.length === 0, missing, comboCode, usedStep4 };
   }
 
+  // Đếm số bệnh nhân đã được "khám xong, chỉ định đi làm thủ thuật" trong
+  // TỪNG buổi (theo đúng thứ tự STT xử lý) — dùng để tính examFloor cho bệnh
+  // nhân kế tiếp trong buổi đó (xem EXAM_PACING_MINUTES). Chỉ đếm bệnh nhân
+  // THỰC SỰ được xếp vào buổi đó (kể cả khi họ thiếu bước), không đếm 2 lần
+  // cho lượt "thử" ở buổi không được chọn.
+  const examCounters = new Map(shifts.map((s) => [s, 0]));
+  function examFloorFor(shiftWindow) {
+    return shiftWindow.start + EXAM_PACING_MINUTES * examCounters.get(shiftWindow);
+  }
+
   for (const patient of sortedPatients) {
     if (shifts.length <= 1 || optimizationMode === 'max_patients') {
       // Chỉ 1 ca, hoặc đang ở chế độ tối đa số bệnh nhân (không cần rải đều
       // Xông giữa 2 buổi) -> giữ cách cũ: thử lần lượt, dùng buổi đầu tiên
       // xong được.
       let outcome = null;
+      let usedShift = null;
       for (const shiftWindow of shifts) {
         const snap = snapshotState();
-        outcome = attemptPatientInShift(patient, shiftWindow);
-        if (outcome.ok) break;
+        outcome = attemptPatientInShift(patient, shiftWindow, examFloorFor(shiftWindow));
+        if (outcome.ok) { usedShift = shiftWindow; break; }
         restoreState(snap);
       }
+      if (usedShift) examCounters.set(usedShift, examCounters.get(usedShift) + 1);
       finalizePatientOutcome(patient, outcome);
       continue;
     }
@@ -628,7 +668,7 @@ function generateSchedule(config, patients) {
     const attempts = [];
     for (const shiftWindow of shifts) {
       const snap = snapshotState();
-      const outcome = attemptPatientInShift(patient, shiftWindow);
+      const outcome = attemptPatientInShift(patient, shiftWindow, examFloorFor(shiftWindow));
       if (outcome.ok) {
         attempts.push({ shiftWindow, outcome, snap: snapshotState() });
       }
@@ -638,8 +678,9 @@ function generateSchedule(config, patients) {
     if (attempts.length === 0) {
       // Không buổi nào xong được đủ 4 bước -> báo thiếu theo lần thử cuối
       // cùng (buổi chiều) để có thông tin cụ thể nhất.
+      const lastShift = shifts[shifts.length - 1];
       const snap = snapshotState();
-      const lastOutcome = attemptPatientInShift(patient, shifts[shifts.length - 1]);
+      const lastOutcome = attemptPatientInShift(patient, lastShift, examFloorFor(lastShift));
       restoreState(snap);
       finalizePatientOutcome(patient, lastOutcome);
       continue;
@@ -659,6 +700,7 @@ function generateSchedule(config, patients) {
     });
     const chosen = attempts[0];
     restoreState(chosen.snap); // áp lại đúng kết quả đã chọn
+    examCounters.set(chosen.shiftWindow, examCounters.get(chosen.shiftWindow) + 1);
     finalizePatientOutcome(patient, chosen.outcome);
   }
 
