@@ -434,6 +434,23 @@ async function loadConfigAndRenderSettings() {
   }
 }
 
+// Thứ tự hiển thị quen thuộc (T2 đầu tuần, CN cuối tuần); giá trị số khớp
+// đúng quy ước Date.getDay() (0=CN...6=T7) mà server dùng để lọc work_days.
+const WEEKDAY_LABELS = [
+  { value: 1, label: 'T2' }, { value: 2, label: 'T3' }, { value: 3, label: 'T4' },
+  { value: 4, label: 'T5' }, { value: 5, label: 'T6' }, { value: 6, label: 'T7' },
+  { value: 0, label: 'CN' },
+];
+function workDaysCheckboxesHtml(s) {
+  const restricted = Array.isArray(s.work_days) && s.work_days.length > 0;
+  return WEEKDAY_LABELS.map(({ value, label }) => {
+    const checked = !restricted || s.work_days.includes(value);
+    return `<label style="display:inline-flex;align-items:center;gap:2px;margin-right:6px;font-weight:400;cursor:pointer;font-size:12px;">
+      <input type="checkbox" class="work-day-chk" data-day="${value}" ${checked ? 'checked' : ''}>${label}
+    </label>`;
+  }).join('');
+}
+
 function renderSettings() {
   const c = currentConfig;
   const settingsMap = Object.fromEntries((c.settings || []).map((s) => [s.key, s.value]));
@@ -451,9 +468,25 @@ function renderSettings() {
     <tr data-id="${s.id}">
       <td>${escapeHtml(s.name)}${s.note ? `<br><span class="muted">${escapeHtml(s.note)}</span>` : ''}</td>
       <td><span class="badge-role">${s.role}</span></td>
+      <td>${workDaysCheckboxesHtml(s)}</td>
       <td><input type="checkbox" class="toggle-staff-active" ${s.active ? 'checked' : ''}></td>
       <td></td>
     </tr>`).join('');
+  $all('.work-day-chk').forEach((chk) => {
+    chk.addEventListener('change', async (ev) => {
+      const tr = ev.target.closest('tr');
+      const checkedDays = Array.from(tr.querySelectorAll('.work-day-chk')).filter((x) => x.checked).map((x) => Number(x.dataset.day));
+      if (checkedDays.length === 0) {
+        alert('Phải chọn ít nhất 1 ngày làm việc trong tuần.');
+        ev.target.checked = true;
+        return;
+      }
+      const s = c.staff.find((x) => x.id === tr.dataset.id);
+      const work_days = checkedDays.length === 7 ? null : checkedDays; // đủ 7 ngày = làm cả tuần (lưu null cho gọn)
+      await api('/api/ctt-config', { method: 'POST', body: JSON.stringify({ action: 'upsert_staff', payload: { id: s.id, name: s.name, role: s.role, qualification: s.qualification, note: s.note, active: s.active, work_days } }) });
+      await loadConfigAndRenderSettings();
+    });
+  });
   $all('.toggle-staff-active').forEach((chk) => {
     chk.addEventListener('change', async (ev) => {
       if (!ev.target.checked && !confirm('Ngừng hoạt động nhân sự này? Họ sẽ không được xếp lịch chia thủ thuật nữa cho tới khi bật lại.')) {

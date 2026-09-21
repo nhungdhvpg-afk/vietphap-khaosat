@@ -39,12 +39,22 @@ module.exports = async (req, res) => {
       const { action, payload } = req.body || {};
       switch (action) {
         case 'upsert_staff': {
-          const { id, name, role, qualification, active, note } = payload || {};
+          const { id, name, role, qualification, active, note, work_days } = payload || {};
           if (!name || !['BS', 'YS', 'DD'].includes(role)) {
             res.status(400).json({ error: 'Thiếu tên hoặc vai trò không hợp lệ (BS/YS/DD).' });
             return;
           }
+          if (work_days !== undefined && work_days !== null) {
+            if (!Array.isArray(work_days) || work_days.length === 0 || work_days.some((d) => !Number.isInteger(d) || d < 0 || d > 6)) {
+              res.status(400).json({ error: 'Ngày làm việc không hợp lệ — phải chọn ít nhất 1 ngày (0-6).' });
+              return;
+            }
+          }
           const row = { name, role, qualification: qualification || null, active: active !== false, note: note || null, updated_at: new Date().toISOString() };
+          // Chỉ ghi đè work_days khi payload có truyền lên (VD từ ô chọn "Ngày
+          // làm việc") — các lượt gọi khác (VD chỉ bật/tắt active) không nên
+          // vô tình xoá mất cấu hình ngày làm việc đã đặt trước đó.
+          if (work_days !== undefined) row.work_days = work_days;
           const query = id ? db.from('ctt_staff').update(row).eq('id', id) : db.from('ctt_staff').insert(row);
           const { error } = await query;
           if (error) throw error;
