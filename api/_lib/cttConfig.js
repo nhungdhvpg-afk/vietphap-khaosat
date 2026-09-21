@@ -8,7 +8,14 @@ function hhmmToMinutes(hhmm) {
   return h * 60 + m;
 }
 
-async function loadCttConfig() {
+/**
+ * @param {string} [date] - Ngày YYYY-MM-DD cần chia lịch (dùng để lọc nhân
+ *   sự theo "ngày làm việc trong tuần", VD Lý Hồng Vỹ chỉ làm thứ 7/CN).
+ *   Bỏ trống khi chỉ cần cấu hình chung (màn hình Cài đặt, Xem lại theo
+ *   ngày...) — khi đó KHÔNG lọc theo ngày, trả về đầy đủ nhân sự đang hoạt
+ *   động như trước.
+ */
+async function loadCttConfig(date) {
   const db = getSupabaseAdmin();
 
   const [{ data: staffRows, error: e1 }, { data: machineRows, error: e2 }, { data: procRows, error: e3 }, { data: fixedMonitorRows, error: e4 }, { data: comboRows, error: e5 }, { data: settingRows, error: e6 }] = await Promise.all([
@@ -59,7 +66,7 @@ async function loadCttConfig() {
     comboLabels[c.code] = { name: c.name, step2Code: c.step2_code, step4Code: c.step4_code, priority: c.priority };
   }
 
-  const staff = (staffRows || []).map((s) => ({ id: s.id, name: s.name, role: s.role, active: s.active, qualification: s.qualification, note: s.note }));
+  const staff = (staffRows || []).map((s) => ({ id: s.id, name: s.name, role: s.role, active: s.active, qualification: s.qualification, note: s.note, work_days: s.work_days || null }));
   const machines = (machineRows || []).map((m) => ({ id: m.id, name: m.name, type: m.type, active: m.active }));
 
   // Cảnh báo trùng tên nhân sự ĐANG HOẠT ĐỘNG: nếu 2 người khác nhau (2 id
@@ -73,8 +80,29 @@ async function loadCttConfig() {
   for (const s of activeStaff) nameCounts.set(s.name, (nameCounts.get(s.name) || 0) + 1);
   const duplicateStaffNames = Array.from(nameCounts.entries()).filter(([, n]) => n > 1).map(([name]) => name);
 
+  // "Ngày làm việc trong tuần" — mặc định (work_days = NULL/rỗng) là làm CẢ
+  // TUẦN. Chỉ khi có `date` cụ thể (đang chia lịch cho 1 ngày) mới lọc bớt
+  // những ai không làm việc hôm đó (VD Lý Hồng Vỹ chỉ làm thứ 7/CN) — dùng
+  // đúng quy ước Date.getDay() (0=CN...6=Thứ 7) khớp với work_days lưu ở DB.
+  const dayOfWeek = date ? new Date(`${date}T00:00:00`).getDay() : null;
+  const worksOnDay = (s) => dayOfWeek == null || !Array.isArray(s.work_days) || s.work_days.length === 0 || s.work_days.includes(dayOfWeek);
+  const schedulableStaff = activeStaff.filter(worksOnDay);
+  const schedulableStaffIds = new Set(schedulableStaff.map((s) => s.id));
+
+  // Nếu người TRÔNG CỐ ĐỊNH của 1 thủ thuật không làm việc hôm nay, bỏ ràng
+  // buộc "cố định" cho riêng lần chia này (để người khác trong monitor_roles
+  // trông thay) — tránh tham chiếu tới 1 id không có trong danh sách nhân sự
+  // hôm đó (nếu không sẽ gây lỗi khi thuật toán tra staffBusy cho id đó).
+  if (dayOfWeek != null) {
+    for (const p of Object.values(procedures)) {
+      if (p.fixed_monitor_staff_id && !schedulableStaffIds.has(p.fixed_monitor_staff_id)) {
+        p.fixed_monitor_staff_id = null;
+      }
+    }
+  }
+
   return {
-    schedulerConfig: { shifts, transferBufferMinutes, procedures, staff: activeStaff, machines: machines.filter((m) => m.active), comboLabels, optimizationMode },
+    schedulerConfig: { shifts, transferBufferMinutes, procedures, staff: schedulableStaff, machines: machines.filter((m) => m.active), comboLabels, optimizationMode },
     raw: { staff, machines, procedures: procRows || [], combos: comboRows || [], settings: settingRows || [], fixedMonitor: fixedMonitorRows || [] },
     duplicateStaffNames,
   };
