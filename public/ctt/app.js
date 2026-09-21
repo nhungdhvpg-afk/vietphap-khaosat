@@ -470,8 +470,22 @@ function renderSettings() {
       <td><span class="badge-role">${s.role}</span></td>
       <td>${workDaysCheckboxesHtml(s)}</td>
       <td><input type="checkbox" class="toggle-staff-active" ${s.active ? 'checked' : ''}></td>
-      <td></td>
+      <td><span class="del-row del-staff" title="Xoá hẳn nhân sự này">✕</span></td>
     </tr>`).join('');
+  $all('.del-staff').forEach((el) => {
+    el.addEventListener('click', async (ev) => {
+      const tr = ev.target.closest('tr');
+      const s = c.staff.find((x) => x.id === tr.dataset.id);
+      if (!confirm(`Xoá HẲN nhân sự "${s.name}" khỏi hệ thống?\n\nKhác với việc bỏ tích "Đang chia" (chỉ tạm ngừng, giữ lại lịch sử) — xoá là VĨNH VIỄN, không thể hoàn tác. Nếu người này đang là "người trông cố định" của Điện châm/Thủy châm, phân công đó cũng bị xoá theo. Lịch sử những ngày đã chia trước đây vẫn được giữ lại (chỉ mất tên người thực hiện ở các lượt cũ).\n\nNếu chỉ tạm nghỉ phép, nên dùng cột "Đang chia" thay vì xoá.`)) return;
+      showError('#generate-error', '');
+      try {
+        await api('/api/ctt-config', { method: 'POST', body: JSON.stringify({ action: 'delete_staff', payload: { id: s.id } }) });
+        await loadConfigAndRenderSettings();
+      } catch (e) {
+        alert('Không xoá được: ' + e.message);
+      }
+    });
+  });
   $all('.work-day-chk').forEach((chk) => {
     chk.addEventListener('change', async (ev) => {
       const tr = ev.target.closest('tr');
