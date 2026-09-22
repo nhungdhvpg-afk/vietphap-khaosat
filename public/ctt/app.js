@@ -815,7 +815,7 @@ $('#btn-modal-submit').addEventListener('click', async () => {
   const btn = $('#btn-modal-submit');
   btn.disabled = true;
   try {
-    const result = await api('/api/ctt-add-patient', { method: 'POST', body: JSON.stringify({ date, stt, name, shift, desiredStart, comboOverride }) });
+    const result = await api('/api/ctt-generate', { method: 'POST', body: JSON.stringify({ action: 'add_patient', date, stt, name, shift, desiredStart, comboOverride }) });
     if (!result.ok) {
       warnEl.innerHTML = escapeHtml(result.message || 'Không thêm được — quá tải.') + (result.suggestedMessage ? '<br>' + escapeHtml(result.suggestedMessage) : '');
       warnEl.style.display = 'block';

@@ -18,6 +18,13 @@ module.exports = async (req, res) => {
     return;
   }
 
+  // Thêm ĐÚNG 1 bệnh nhân mới vào lịch đã chia sẵn (nút "+ Thêm 1 dòng" sau
+  // khi đã chia) dùng chung route này (action riêng) thay vì 1 file api/*.js
+  // mới — xem lý do trong api/_lib/cttAddPatient.js.
+  if (req.body && req.body.action === 'add_patient') {
+    return require('./_lib/cttAddPatient')(req, res);
+  }
+
   try {
     const { date, patients } = req.body || {};
     if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {

@@ -3,25 +3,19 @@
 // ngày. TUYỆT ĐỐI KHÔNG xếp lại những người đã có (chỉ "phát lại" lịch cũ
 // để biết chỗ nào đã bận, rồi tìm chỗ cho riêng người mới, đúng giờ/combo
 // người dùng chọn hoặc combo tự động nếu combo yêu cầu không đủ chỗ).
-// POST /api/ctt-add-patient { date, stt, name, shift: 'morning'|'afternoon',
+//
+// Gọi từ api/ctt-generate.js khi req.body.action === 'add_patient' (KHÔNG
+// đặt thành file api/*.js riêng) vì gói Vercel đang dùng giới hạn tối đa 12
+// Serverless Functions — thêm 1 file route nữa sẽ làm build thất bại
+// (đã gặp đúng lỗi này khi tách riêng file lần đầu).
+// Body: { date, stt, name, shift: 'morning'|'afternoon',
 //   desiredStart: 'HH:MM', comboOverride?: 'C1'|'C2'|'C3' }
 const { randomUUID } = require('crypto');
-const { getSupabaseAdmin } = require('./_lib/supabaseAdmin');
-const { getStaffFromRequest } = require('./_lib/auth');
-const { loadCttConfig, hhmmToMinutes } = require('./_lib/cttConfig');
-const { generateSchedule, minutesToHHMM } = require('./_lib/cttScheduler');
+const { getSupabaseAdmin } = require('./supabaseAdmin');
+const { loadCttConfig, hhmmToMinutes } = require('./cttConfig');
+const { generateSchedule, minutesToHHMM } = require('./cttScheduler');
 
-module.exports = async (req, res) => {
-  if (req.method !== 'POST') {
-    res.status(405).json({ error: 'Method not allowed' });
-    return;
-  }
-  const staffAcct = await getStaffFromRequest(req);
-  if (!staffAcct) {
-    res.status(401).json({ error: 'Chưa đăng nhập.' });
-    return;
-  }
-
+module.exports = async function addPatient(req, res) {
   try {
     const { date, stt, name, shift, desiredStart, comboOverride } = req.body || {};
     if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
