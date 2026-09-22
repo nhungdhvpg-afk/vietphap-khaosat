@@ -563,7 +563,16 @@ function generateSchedule(config, patients) {
       if (pendingFlexSteps.includes('step4')) {
         let primaryPlan = null;
         let fallbackPlan = null;
-        if (!forceStep4 || forceStep4 === 'XH') {
+        // Xông hơi CHỈ được ghép cùng Điện châm (đúng combo 1 chính thức) —
+        // "Hào châm + Xông hơi" KHÔNG nằm trong 3 combo chính thức của hồ sơ
+        // gốc (chỉ có: XBBH+DC+TC+XH, XBBH+DC+TC+CN, XBBH+HC+TC+CN). Nếu
+        // bước 2 đã chốt là Hào châm (hoặc chắc chắn sẽ là Hào châm vì Điện
+        // châm hiện không khả thi), Xông hơi không còn là lựa chọn hợp lệ,
+        // chỉ còn Cứu ngải.
+        const dcStillPossible = !pendingFlexSteps.includes('step2')
+          ? usedStep2 === 'DC'
+          : (!forceStep2 || forceStep2 === 'DC') && !!planSplitProcedure(procByCode.DC, patientState.cursor, fixedMonitorFor(procByCode.DC));
+        if (dcStillPossible && (!forceStep4 || forceStep4 === 'XH')) {
           primaryPlan = planSimpleProcedure(procByCode.XH, patientState.cursor);
         }
         if (!forceStep4 || forceStep4 === 'CN') {

@@ -107,7 +107,14 @@ $all('.tabs button').forEach((btn) => {
 // NHẬP DANH SÁCH BỆNH NHÂN
 // ---------------------------------------------------------------------------
 function comboSelectHtml(selected) {
-  const options = [['', 'Tự động (khuyên dùng)'], ['C1', 'C1 — Điện châm + Xông'], ['C2', 'C2 — Điện châm + Cứu ngải'], ['C2B', 'C2B — Hào châm + Cứu ngải'], ['C3', 'C3 — Hào châm + Xông']];
+  // Đúng 3 combo chính thức theo hồ sơ gốc (thứ tự ưu tiên 1-2-3) — không còn
+  // "Hào châm + Xông" vì không nằm trong danh sách combo chính thức.
+  const options = [
+    ['', 'Tự động (khuyên dùng)'],
+    ['C1', 'Combo 1 — XBBH + Điện châm + Thủy châm + Xông hơi (ưu tiên cao nhất)'],
+    ['C2', 'Combo 2 — XBBH + Điện châm + Thủy châm + Cứu ngải (ưu tiên thứ 2)'],
+    ['C3', 'Combo 3 — XBBH + Hào châm + Thủy châm + Cứu ngải (ưu tiên thứ 3)'],
+  ];
   return options.map(([v, label]) => `<option value="${v}" ${v === selected ? 'selected' : ''}>${label}</option>`).join('');
 }
 
@@ -229,7 +236,7 @@ function machineNameOf(e) {
 }
 function comboPillHtml(code) {
   if (!code) return '';
-  const cls = code === 'C1' ? 'pill-c1' : (code === 'C2' ? 'pill-c2' : (code === 'C2B' ? 'pill-c2b' : 'pill-c3'));
+  const cls = code === 'C1' ? 'pill-c1' : (code === 'C2' ? 'pill-c2' : 'pill-c3');
   return `<span class="pill ${cls}">${code}</span>`;
 }
 
