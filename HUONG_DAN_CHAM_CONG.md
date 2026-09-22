@@ -30,7 +30,11 @@ chỉ tồn tại trên máy đang mở trình duyệt, cho đến khi bấm t�
 1. Xuất 3 báo cáo từ HIS cho đúng kỳ cần chấm công (giữ nguyên cấu trúc cột
    như bản mẫu — không đổi tên cột, không xoá cột).
 2. Đăng nhập `cham-cong/index.html`.
-3. Ở tab **"Chấm công"**, tải lần lượt 3 file vào đúng 3 ô ① ② ③.
+3. Ở tab **"Chấm công"**, bấm chọn file rồi chọn CẢ 3 file cùng lúc (giữ
+   Ctrl/Cmd khi chọn nhiều file) — không cần đúng thứ tự, hệ thống tự nhận
+   diện file nào là gì dựa vào nội dung và hiện tên file vào đúng ô ① ② ③.
+   Nếu 1 file không nhận diện được, khung màu đỏ sẽ báo tên file đó để kiểm
+   tra lại (thường do đổi cấu trúc cột/tiêu đề so với bản mẫu).
 4. Bấm **"⚙ Xử lý & lập bảng chấm công"**. Sau vài giây, kết quả hiện ngay:
    - Bảng chấm công **chi tiết** (giờ hoạt động sớm nhất - muộn nhất mỗi người mỗi ngày).
    - Bảng chấm công **rút gọn** (chỉ đánh dấu "1" cho ngày có đi làm — dùng nhanh để đếm công).

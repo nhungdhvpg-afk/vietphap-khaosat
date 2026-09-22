@@ -13,7 +13,8 @@ const supa = (cfg.SUPABASE_URL && cfg.SUPABASE_ANON_KEY)
 let me = null;              // { role, cham_cong_manager, canManage }
 let lastResult = null;      // { events, warnings, month, year } của lần xử lý gần nhất (để xuất Excel)
 let reviewsMap = new Map(); // `${person_key}|${category}` -> { decision, note, reviewed_by, reviewed_at }
-const selectedFiles = { 1: null, 2: null, 3: null };
+let detectedRows = { chiphi: null, cls: null, thuthuat: null };   // rows (array-of-arrays) đã đọc + nhận diện từ file
+let detectedNames = { chiphi: null, cls: null, thuthuat: null };  // tên file tương ứng, để hiện trên UI
 const reviewKey = (personKey, category) => `${personKey}|${category}`;
 
 function $(sel) { return document.querySelector(sel); }
@@ -403,32 +404,64 @@ function renderReviewsAdminPanel(reviews) {
 }
 
 // ---------------------------------------------------------------------------
-// XỬ LÝ FILE
+// XỬ LÝ FILE — chọn 1 lần cả 3 file, tự nhận diện đúng loại theo nội dung
+// (không bắt buộc chọn đúng thứ tự ①②③).
 // ---------------------------------------------------------------------------
-[1, 2, 3].forEach((n) => {
-  $(`#file-${n}`).addEventListener('change', (ev) => {
-    const file = ev.target.files[0] || null;
-    selectedFiles[n] = file;
-    $(`#fname-${n}`).textContent = file ? file.name : 'Chưa chọn file';
-    $(`#slot-${n}`).classList.toggle('ready', !!file);
-    $('#btn-process').disabled = !(selectedFiles[1] && selectedFiles[2] && selectedFiles[3]);
-  });
+// Nhận diện dựa trên tiêu đề/tên cột đặc trưng của mỗi báo cáo — ổn định hơn
+// dựa vào tên file, vì tên file do HIS đặt có thể đổi mỗi lần xuất.
+function detectFileKind(rows) {
+  const sample = rows.slice(0, 10).flat().filter((v) => typeof v === 'string').join(' | ').toLowerCase();
+  if (sample.includes('sổ thủ thuật') || sample.includes('ttv chính') || sample.includes('ngày/giờ tt')) return 'thuthuat';
+  if (sample.includes('sổ kết quả') || sample.includes('bs chỉ định') || sample.includes('bs đọc kết quả')) return 'cls';
+  if (sample.includes('bacsi') && sample.includes('ngay_yl')) return 'chiphi';
+  return null;
+}
+
+function updateUploadSlotsUI() {
+  for (const kind of ['chiphi', 'cls', 'thuthuat']) {
+    const name = detectedNames[kind];
+    $(`#fname-${kind}`).textContent = name || 'Chưa nhận diện được';
+    $(`#slot-${kind}`).classList.toggle('ready', !!name);
+  }
+  $('#btn-process').disabled = !(detectedRows.chiphi && detectedRows.cls && detectedRows.thuthuat);
+}
+
+$('#file-multi').addEventListener('change', async (ev) => {
+  const files = Array.from(ev.target.files || []);
+  detectedRows = { chiphi: null, cls: null, thuthuat: null };
+  detectedNames = { chiphi: null, cls: null, thuthuat: null };
+  showError('#process-error', '');
+  updateUploadSlotsUI();
+  if (!files.length) return;
+  $('#process-status').innerHTML = '<span class="spinner"></span>Đang nhận diện file...';
+  const unrecognized = [];
+  for (const file of files) {
+    try {
+      const rows = await readWorkbookRows(file);
+      const kind = detectFileKind(rows);
+      if (!kind) { unrecognized.push(file.name); continue; }
+      detectedRows[kind] = rows;
+      detectedNames[kind] = file.name;
+    } catch (e) {
+      unrecognized.push(`${file.name} (${e.message || 'không đọc được'})`);
+    }
+  }
+  updateUploadSlotsUI();
+  $('#process-status').textContent = '';
+  if (unrecognized.length) {
+    showError('#process-error', `Không nhận diện được ${unrecognized.length} file: ${unrecognized.join(', ')}. Kiểm tra lại đúng 3 báo cáo HIS gốc (không đổi cấu trúc cột/tiêu đề).`);
+  }
 });
 
 $('#btn-process').addEventListener('click', async () => {
   showError('#process-error', '');
   $('#btn-process').disabled = true;
-  $('#process-status').innerHTML = '<span class="spinner"></span>Đang đọc và xử lý dữ liệu...';
+  $('#process-status').innerHTML = '<span class="spinner"></span>Đang xử lý dữ liệu...';
   try {
     const reg = makeNameRegistry();
-    const [rows1, rows2, rows3] = await Promise.all([
-      readWorkbookRows(selectedFiles[1]),
-      readWorkbookRows(selectedFiles[2]),
-      readWorkbookRows(selectedFiles[3]),
-    ]);
-    const ev1 = readFile1_ChiPhi(rows1, reg);
-    const ev2 = readFile2_CLS(rows2, reg);
-    const { events: ev3, missingPerformer } = readFile3_ThuThuat(rows3, reg);
+    const ev1 = readFile1_ChiPhi(detectedRows.chiphi, reg);
+    const ev2 = readFile2_CLS(detectedRows.cls, reg);
+    const { events: ev3, missingPerformer } = readFile3_ThuThuat(detectedRows.thuthuat, reg);
     const allEvents = [...ev1, ...ev2, ...ev3];
     if (allEvents.length === 0) throw new Error('Không tìm thấy dữ liệu hợp lệ trong 3 file đã chọn — kiểm tra lại đúng file/đúng cấu trúc cột.');
 
