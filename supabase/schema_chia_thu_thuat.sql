@@ -109,6 +109,8 @@ create table if not exists ctt_patients (
   name         text not null,
   combo_override text, -- null = dùng phác đồ chuẩn tự động; hoặc mã combo ép buộc
   priority_discharge boolean not null default false, -- true = cần ra viện hôm nay, ưu tiên khung giờ sớm nhất
+  is_placeholder boolean not null default false, -- true = bệnh nhân "giữ chỗ" BNM (suất để dành), không phải người thật
+  placeholder_shift text check (placeholder_shift in ('morning', 'afternoon')), -- buổi bị khoá cứng, chỉ có nghĩa khi is_placeholder=true
   created_at   timestamptz not null default now(),
   unique (date, stt)
 );

@@ -85,6 +85,19 @@ module.exports = async (req, res) => {
     }
     schedulerConfig.reservedSlotsByShift = [reservedMorning, reservedAfternoon];
 
+    // Biến số suất muốn để dành thành các bệnh nhân "giữ chỗ" (BNM) CỤ THỂ,
+    // cộng dồn thẳng vào danh sách chia thủ thuật — để chỗ để dành hiện RÕ
+    // thành từng dòng có giờ giấc/nhân sự/combo cụ thể (không chỉ là 1 con số
+    // trừu tượng), và để thuật toán THỰC SỰ giữ được chỗ đó (xem cttScheduler.js:
+    // BNM được xếp ưu tiên TRƯỚC bệnh nhân ngoại trú, chỉ sau người ra viện
+    // hôm nay, nên không bao giờ bị danh sách ngoại trú "ăn" mất suất).
+    for (let i = 1; i <= reservedMorning; i++) {
+      cleanPatients.push({ stt: 90000 + i, name: `BNM buổi sáng ${i}`, comboOverride: null, priorityDischarge: false, isPlaceholder: true, placeholderShift: 'morning' });
+    }
+    for (let i = 1; i <= reservedAfternoon; i++) {
+      cleanPatients.push({ stt: 95000 + i, name: `BNM buổi chiều ${i}`, comboOverride: null, priorityDischarge: false, isPlaceholder: true, placeholderShift: 'afternoon' });
+    }
+
     // Xoá dữ liệu cũ của ngày này (nếu có) để chia lại từ đầu.
     const { data: oldPatients } = await db.from('ctt_patients').select('id').eq('date', date);
     if (oldPatients && oldPatients.length) {
@@ -94,11 +107,27 @@ module.exports = async (req, res) => {
 
     const { data: insertedPatients, error: patientInsertError } = await db
       .from('ctt_patients')
-      .insert(cleanPatients.map((p) => ({ date, stt: p.stt, name: p.name, combo_override: p.comboOverride, priority_discharge: p.priorityDischarge })))
-      .select('id, stt, name, combo_override, priority_discharge');
+      .insert(cleanPatients.map((p) => ({
+        date,
+        stt: p.stt,
+        name: p.name,
+        combo_override: p.comboOverride,
+        priority_discharge: p.priorityDischarge,
+        is_placeholder: p.isPlaceholder === true,
+        placeholder_shift: p.placeholderShift || null,
+      })))
+      .select('id, stt, name, combo_override, priority_discharge, is_placeholder, placeholder_shift');
     if (patientInsertError) throw patientInsertError;
 
-    const patientForScheduler = insertedPatients.map((p) => ({ id: p.id, stt: p.stt, name: p.name, comboOverride: p.combo_override, priorityDischarge: p.priority_discharge }));
+    const patientForScheduler = insertedPatients.map((p) => ({
+      id: p.id,
+      stt: p.stt,
+      name: p.name,
+      comboOverride: p.combo_override,
+      priorityDischarge: p.priority_discharge,
+      isPlaceholder: p.is_placeholder,
+      placeholderShift: p.placeholder_shift,
+    }));
     const result = generateSchedule(schedulerConfig, patientForScheduler);
 
     const procIdByCode = Object.fromEntries(Object.values(schedulerConfig.procedures).map((p) => [p.code, p.id]));

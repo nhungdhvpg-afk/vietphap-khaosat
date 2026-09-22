@@ -183,17 +183,24 @@ function generateSchedule(config, patients) {
     initialExamCounters = null,
   } = config;
 
+  // Số suất muốn "để dành" (reservedSlotsByShift) KHÔNG còn được hiện thực
+  // hoá bằng cách thu hẹp giờ kết thúc ca (đã bỏ — một suất để dành cần TRỌN
+  // VẸN thời lượng 1 phác đồ thật, dài hơn NHIỀU so với vài phút nhịp khám,
+  // nên thu hẹp vài phút không đủ đảm bảo giữ được chỗ khi danh sách ngoại
+  // trú dài). Thay vào đó, số suất này được caller (api/ctt-generate.js) biến
+  // thành các bệnh nhân "giữ chỗ" BNM cụ thể, xếp cùng danh sách và được ưu
+  // tiên xếp TRƯỚC bệnh nhân ngoại trú (xem `tierOf`/`candidateShiftsFor` bên
+  // dưới) — nhờ vậy suất để dành LUÔN THỰC SỰ được giữ, dù danh sách ngoại
+  // trú dài bao nhiêu. `reservedSlotsByShift` chỉ còn dùng để HIỂN THỊ lại
+  // đúng số suất đã yêu cầu trong phần tổng kết (shiftCapacity) bên dưới.
   const reservedByShift = reservedSlotsByShift || rawShifts.map(() => 0);
-  // Giờ kết thúc "khả dụng" cho lượt xếp TỰ ĐỘNG bình thường — thu hẹp lại
-  // theo số suất muốn dành ra; giờ kết thúc THẬT (rawShifts) chỉ dùng để báo
-  // cáo "còn nhận thêm được bao nhiêu người" ở cuối hàm, không dùng để xếp.
-  const shifts = rawShifts.map((s, i) => ({ start: s.start, end: s.end - (reservedByShift[i] || 0) * EXAM_PACING_MINUTES }));
+  const shifts = rawShifts.map((s) => ({ start: s.start, end: s.end }));
 
   // Mỗi bệnh nhân PHẢI hoàn tất cả 4 bước TRONG CÙNG 1 buổi (đến 1 lần, làm
   // xong rồi về — không quay lại buổi sau). `activeShifts` là buổi đang được
   // thử cho bệnh nhân hiện tại; mọi hàm tìm chỗ trống bên dưới đều tra cứu
-  // biến này (qua closure) thay vì toàn bộ `shifts`, để không bao giờ vô tình
-  // xếp 1 người vắt sang buổi khác.
+  // biến này (qua closure) thay vì toàn bộ danh sách ca, để không bao giờ vô
+  // tình xếp 1 người vắt sang buổi khác.
   let activeShifts = shifts.slice(0, 1);
 
   // Nhân sự được gán "trông cố định" 1 thủ thuật (VD Vi Thị Hoá -> Thủy châm)
@@ -554,19 +561,51 @@ function generateSchedule(config, patients) {
     return { plan: fallbackPlan, usedPrimary: false };
   }
 
-  // ---- Xử lý từng bệnh nhân: ƯU TIÊN người cần ra viện hôm nay lên đầu
-  // (được xếp vào khung giờ sớm nhất trong ngày để kịp làm hồ sơ ra viện),
-  // rồi mới đến các bệnh nhân ngoại trú còn lại theo đúng thứ tự STT. ----
+  // ---- Xử lý từng bệnh nhân, theo 3 tầng ưu tiên:
+  //   Tầng 0: bệnh nhân "ra viện hôm nay" — luôn xếp trước tiên, vào khung giờ
+  //     SỚM NHẤT của buổi SÁNG (bắt buộc, không được trôi sang buổi chiều).
+  //   Tầng 1: bệnh nhân "giữ chỗ" BNM (buổi sáng/chiều) — xếp NGAY SAU người
+  //     ra viện, TRƯỚC MỌI bệnh nhân ngoại trú, khoá cứng đúng 1 buổi theo
+  //     `placeholderShift`. Xếp trước ngoại trú (thay vì sau) là ĐIỀU BẮT
+  //     BUỘC để suất để dành LUÔN THỰC SỰ được giữ — nếu xếp sau, khi danh
+  //     sách ngoại trú đủ dài để dùng hết công suất cả ngày (rất thường gặp),
+  //     người giữ chỗ sẽ bị "ăn" mất chỗ hoàn toàn dù đã để dành. Cũng vì lý
+  //     do này mà việc "để dành" KHÔNG thể chỉ đơn giản thu hẹp vài phút cuối
+  //     ca (một phác đồ đầy đủ cần nhiều thời gian hơn nhiều so với vài phút
+  //     nhịp khám) — phải giữ chỗ bằng cách xếp THẬT các bệnh nhân giữ chỗ
+  //     trước, chiếm đúng tài nguyên cần thiết.
+  //   Tầng 2: bệnh nhân ngoại trú đã nhập — xếp SAU CÙNG theo đúng nguyên
+  //     tắc/thứ tự STT như cũ (linh hoạt buổi sáng/chiều, tối ưu Xông hơi...).
+  const tierOf = (p) => (p.priorityDischarge ? 0 : (p.isPlaceholder ? 1 : 2));
   const sortedPatients = patients.slice().sort((a, b) => {
-    const prio = (b.priorityDischarge ? 1 : 0) - (a.priorityDischarge ? 1 : 0);
-    return prio !== 0 ? prio : a.stt - b.stt;
+    const ta = tierOf(a), tb = tierOf(b);
+    return ta !== tb ? ta - tb : a.stt - b.stt;
   });
   const procByCode = Object.fromEntries(Object.values(procedures).map((p) => [p.code, p]));
 
-  // Nhãn khung giờ ca hôm nay (VD "07:01-11:30 & 13:31-17:00") để ghi rõ vào
+  // Buổi bắt buộc (chỉ số trong `shifts`) của 1 bệnh nhân, nếu có — null =
+  // được xếp linh hoạt như bình thường (đa số bệnh nhân ngoại trú). 0 = buổi
+  // sáng, 1 = buổi chiều (đúng quy ước 'morning'/'afternoon' dùng xuyên suốt
+  // hệ thống).
+  function forcedShiftIndexOf(patient) {
+    if (patient.priorityDischarge) return 0; // ra viện hôm nay -> LUÔN buổi sáng
+    if (patient.placeholderShift === 'morning') return 0;
+    if (patient.placeholderShift === 'afternoon') return 1;
+    return null;
+  }
+  /** Danh sách buổi được PHÉP thử cho 1 bệnh nhân — bị khoá cứng vào đúng 1
+   * buổi cho người ra viện hôm nay / người giữ chỗ BNM, còn lại (ngoại trú)
+   * được thử linh hoạt cả 2 buổi như thuật toán gốc. */
+  function candidateShiftsFor(patient) {
+    const idx = forcedShiftIndexOf(patient);
+    if (idx != null && shifts[idx]) return [shifts[idx]];
+    return shifts;
+  }
+
+  // Nhãn khung giờ ca hôm nay (VD "07:00-11:30 & 13:30-17:00") để ghi rõ vào
   // lý do cảnh báo — bệnh nhân trong `warnings` LUÔN là người đã thử HẾT mọi
-  // buổi trong ngày mà vẫn không đủ chỗ hoàn tất phác đồ trong khung giờ này.
-  const shiftLabel = shifts.map((s) => `${minutesToHHMM(s.start)}-${minutesToHHMM(s.end)}`).join(' & ');
+  // buổi được PHÉP mà vẫn không đủ chỗ hoàn tất phác đồ trong khung giờ này.
+  const shiftLabel = rawShifts.map((s) => `${minutesToHHMM(s.start)}-${minutesToHHMM(s.end)}`).join(' & ');
 
   /** Thử xếp đủ 4 bước cho 1 bệnh nhân, CHỈ TRONG PHẠM VI 1 buổi (shiftWindow).
    * `examFloor` là mốc SỚM NHẤT bệnh nhân này được phép bắt đầu BẤT KỲ bước
@@ -684,13 +723,20 @@ function generateSchedule(config, patients) {
         commitSimple(procByCode.XBBH, winner.choice.plan, patientState);
         step1Done = true;
       } else if (winner.key === 'step2') {
-        const procCode = winner.choice.usedPrimary ? (forceStep2 || 'DC') : (forceStep2 ? (forceStep2 === 'DC' ? 'HC' : 'DC') : 'HC');
+        // Khi ép combo, procCode LUÔN đúng bằng chính giá trị ép (forceStep2)
+        // bất kể đó là phương án "chính" (DC) hay "dự phòng" (HC) — trước đây
+        // nhánh dự phòng bị suy luận sai thành 'DC' mỗi khi forceStep2==='HC'
+        // (coi mọi giá trị ép khác 'DC' như thể không hề bị ép), khiến ép
+        // Combo 3 (Hào châm) âm thầm xếp NHẦM thành Điện châm.
+        const procCode = forceStep2 || (winner.choice.usedPrimary ? 'DC' : 'HC');
         const proc = procByCode[procCode];
         commitSplit(proc, winner.choice.plan, patientState);
         usedStep2 = procCode;
         pendingFlexSteps.splice(pendingFlexSteps.indexOf('step2'), 1);
       } else if (winner.key === 'step4') {
-        const procCode = winner.choice.usedPrimary ? (forceStep4 || 'XH') : (forceStep4 ? (forceStep4 === 'XH' ? 'CN' : 'XH') : 'CN');
+        // Tương tự step2: ép combo luôn ưu tiên đúng giá trị ép, kể cả khi đó
+        // là phương án dự phòng (CN) — trước đây bị suy luận sai thành 'XH'.
+        const procCode = forceStep4 || (winner.choice.usedPrimary ? 'XH' : 'CN');
         const proc = procByCode[procCode];
         commitSimple(proc, winner.choice.plan, patientState);
         usedStep4 = procCode;
@@ -723,40 +769,43 @@ function generateSchedule(config, patients) {
   // nhân kế tiếp trong buổi đó (xem EXAM_PACING_MINUTES). Chỉ đếm bệnh nhân
   // THỰC SỰ được xếp vào buổi đó (kể cả khi họ thiếu bước), không đếm 2 lần
   // cho lượt "thử" ở buổi không được chọn.
-  const examCounters = new Map(shifts.map((s, i) => [s, (initialExamCounters && initialExamCounters[i]) || 0]));
+  const examCounters = new Map(rawShifts.map((s, i) => [s.start, (initialExamCounters && initialExamCounters[i]) || 0]));
   function examFloorFor(shiftWindow) {
     // Khi thêm 1 bệnh nhân cụ thể vào lịch có sẵn, người dùng tự chọn giờ
     // bắt đầu — bỏ qua nhịp khám tự động, chỉ đảm bảo không sớm hơn đầu ca.
     if (forcedExamFloor != null) return Math.max(shiftWindow.start, forcedExamFloor);
-    return shiftWindow.start + EXAM_PACING_MINUTES * examCounters.get(shiftWindow);
+    return shiftWindow.start + EXAM_PACING_MINUTES * examCounters.get(shiftWindow.start);
   }
 
   for (const patient of sortedPatients) {
-    if (shifts.length <= 1 || optimizationMode === 'max_patients') {
-      // Chỉ 1 ca, hoặc đang ở chế độ tối đa số bệnh nhân (không cần rải đều
-      // Xông giữa 2 buổi) -> giữ cách cũ: thử lần lượt, dùng buổi đầu tiên
-      // xong được.
+    const candidateShifts = candidateShiftsFor(patient);
+
+    if (candidateShifts.length <= 1 || optimizationMode === 'max_patients') {
+      // Chỉ 1 buổi được phép thử (bị khoá cứng, hoặc cấu hình chỉ có 1 ca),
+      // hoặc đang ở chế độ tối đa số bệnh nhân (không cần rải đều Xông giữa
+      // 2 buổi) -> giữ cách cũ: thử lần lượt, dùng buổi đầu tiên xong được.
       let outcome = null;
       let usedShift = null;
-      for (const shiftWindow of shifts) {
+      for (const shiftWindow of candidateShifts) {
         const snap = snapshotState();
         outcome = attemptPatientInShift(patient, shiftWindow, examFloorFor(shiftWindow));
         if (outcome.ok) { usedShift = shiftWindow; break; }
         restoreState(snap);
       }
-      if (usedShift) examCounters.set(usedShift, examCounters.get(usedShift) + 1);
+      if (usedShift) examCounters.set(usedShift.start, examCounters.get(usedShift.start) + 1);
       finalizePatientOutcome(patient, outcome);
       continue;
     }
 
-    // Chế độ 'max_xong' với 2 buổi trở lên: THỬ CẢ 2 BUỔI cho mỗi bệnh nhân
-    // (không dừng lại ở buổi đầu tiên xong được) rồi chọn buổi nào cho bệnh
-    // nhân này dùng được Xông hơi — kể cả khi đó là buổi CHIỀU — thay vì luôn
-    // nhét vào buổi sáng trước rồi bỏ mặc máy Xông buổi chiều trống không.
-    // Máy Xông phải chạy hết công suất ở CẢ 2 buổi trước khi chấp nhận cho
-    // ai đó dùng Cứu ngải thay thế.
+    // Chế độ 'max_xong' với 2 buổi trở lên (bệnh nhân ngoại trú, không bị
+    // khoá buổi): THỬ CẢ 2 BUỔI cho mỗi bệnh nhân (không dừng lại ở buổi đầu
+    // tiên xong được) rồi chọn buổi nào cho bệnh nhân này dùng được Xông hơi
+    // — kể cả khi đó là buổi CHIỀU — thay vì luôn nhét vào buổi sáng trước
+    // rồi bỏ mặc máy Xông buổi chiều trống không. Máy Xông phải chạy hết
+    // công suất ở CẢ 2 buổi trước khi chấp nhận cho ai đó dùng Cứu ngải thay
+    // thế.
     const attempts = [];
-    for (const shiftWindow of shifts) {
+    for (const shiftWindow of candidateShifts) {
       const snap = snapshotState();
       const outcome = attemptPatientInShift(patient, shiftWindow, examFloorFor(shiftWindow));
       if (outcome.ok) {
@@ -768,7 +817,7 @@ function generateSchedule(config, patients) {
     if (attempts.length === 0) {
       // Không buổi nào xong được đủ 4 bước -> báo thiếu theo lần thử cuối
       // cùng (buổi chiều) để có thông tin cụ thể nhất.
-      const lastShift = shifts[shifts.length - 1];
+      const lastShift = candidateShifts[candidateShifts.length - 1];
       const snap = snapshotState();
       const lastOutcome = attemptPatientInShift(patient, lastShift, examFloorFor(lastShift));
       restoreState(snap);
@@ -790,7 +839,7 @@ function generateSchedule(config, patients) {
     });
     const chosen = attempts[0];
     restoreState(chosen.snap); // áp lại đúng kết quả đã chọn
-    examCounters.set(chosen.shiftWindow, examCounters.get(chosen.shiftWindow) + 1);
+    examCounters.set(chosen.shiftWindow.start, examCounters.get(chosen.shiftWindow.start) + 1);
     finalizePatientOutcome(patient, chosen.outcome);
   }
 
@@ -818,10 +867,10 @@ function generateSchedule(config, patients) {
   // bệnh nhân giả định, xem có xong không — chính xác hơn nhiều so với ước
   // lượng theo công thức, vì tôn trọng ĐẦY ĐỦ mọi ràng buộc thật (máy, nhân
   // sự...), không chỉ riêng nhịp khám).
-  const examCountersByShift = shifts.map((s) => examCounters.get(s));
+  const examCountersByShift = rawShifts.map((s) => examCounters.get(s.start));
 
   const machineUtilization = machines.map((m) => {
-    const capacityMinutes = shifts.reduce((sum, s) => sum + (s.end - s.start), 0);
+    const capacityMinutes = rawShifts.reduce((sum, s) => sum + (s.end - s.start), 0);
     const used = machineUsedMinutes.get(m.id) || 0;
     return { machineId: m.id, name: m.name, type: m.type, usedMinutes: used, capacityMinutes, utilizationPct: capacityMinutes ? Math.round((used / capacityMinutes) * 1000) / 10 : 0 };
   });
@@ -902,17 +951,17 @@ function generateSchedule(config, patients) {
       incompletePatients: warnings.length,
       comboCount,
       procedureCount,
-      // [{ start, end, reservedSlots, reservedWindowStart, examCounter }] —
-      // song song với rawShifts. `reservedWindowStart` là mốc bắt đầu khung
-      // giờ đã chủ động để dành cho bệnh nhân thêm sau (nếu có dành chỗ).
-      // `examCounter` (giá trị bộ đếm nhịp khám cuối buổi) để bên gọi TIẾP
-      // TỤC mô phỏng chính xác khi cần tính "còn nhận thêm được bao nhiêu
-      // người" (xem examCountersByShift/initialExamCounters).
+      // [{ start, end, reservedSlots, examCounter }] — song song với
+      // rawShifts. `reservedSlots` chỉ để HIỂN THỊ lại đúng số suất CEO đã
+      // yêu cầu để dành (suất này đã được hiện thực hoá thành các bệnh nhân
+      // giữ chỗ BNM thật trong `patients`, không còn là 1 con số áp đặt lên
+      // thuật toán). `examCounter` (giá trị bộ đếm nhịp khám cuối buổi) để
+      // bên gọi TIẾP TỤC mô phỏng chính xác khi cần tính "còn nhận thêm được
+      // bao nhiêu người" (xem examCountersByShift/initialExamCounters).
       shiftCapacity: rawShifts.map((s, i) => ({
         start: s.start,
         end: s.end,
         reservedSlots: reservedByShift[i] || 0,
-        reservedWindowStart: shifts[i].end,
         examCounter: examCountersByShift[i],
       })),
       machineUtilization,

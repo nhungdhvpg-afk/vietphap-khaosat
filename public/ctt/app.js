@@ -54,8 +54,11 @@ async function enterApp() {
   $('#btn-logout').style.display = 'inline-flex';
   $('#input-date').value = todayStr();
   $('#reload-date').value = todayStr();
-  ensureAtLeastOneRow();
+  // Nạp cấu hình (gồm danh sách combo THẬT từ CSDL) TRƯỚC khi thêm dòng đầu
+  // tiên — nếu không, dòng đầu tiên sẽ chỉ có mỗi lựa chọn "Tự động" (chưa
+  // có currentConfig.combos để render ô chọn combo).
   await loadConfigAndRenderSettings();
+  ensureAtLeastOneRow();
   await checkScheduleExists($('#input-date').value);
 }
 
@@ -142,15 +145,14 @@ $all('.tabs button').forEach((btn) => {
 // NHẬP DANH SÁCH BỆNH NHÂN
 // ---------------------------------------------------------------------------
 function comboSelectHtml(selected) {
-  // Đúng 3 combo chính thức theo hồ sơ gốc (thứ tự ưu tiên 1-2-3) — không còn
-  // "Hào châm + Xông" vì không nằm trong danh sách combo chính thức.
-  const options = [
-    ['', 'Tự động (khuyên dùng)'],
-    ['C1', 'Combo 1 — XBBH + Điện châm + Thủy châm + Xông hơi (ưu tiên cao nhất)'],
-    ['C2', 'Combo 2 — XBBH + Điện châm + Thủy châm + Cứu ngải (ưu tiên thứ 2)'],
-    ['C3', 'Combo 3 — XBBH + Hào châm + Thủy châm + Cứu ngải (ưu tiên thứ 3)'],
-  ];
-  return options.map(([v, label]) => `<option value="${v}" ${v === selected ? 'selected' : ''}>${label}</option>`).join('');
+  // Lấy ĐÚNG danh sách combo đang thật sự cấu hình trong CSDL (currentConfig.combos,
+  // do api/ctt-config.js trả về) thay vì ghi cứng tên/mô tả ở đây — nếu không,
+  // khi CSDL còn dữ liệu combo CŨ (VD chưa chạy migration sửa combo), ô chọn
+  // vẫn hiển thị mô tả MỚI (đúng) trong khi hệ thống thực ra đang ép theo
+  // định nghĩa CŨ — gây hiểu nhầm "chọn combo bị chia sai".
+  const combos = (currentConfig?.combos || []).slice().sort((a, b) => a.priority - b.priority);
+  const options = [['', 'Tự động (khuyên dùng)']].concat(combos.map((c) => [c.code, c.name]));
+  return options.map(([v, label]) => `<option value="${v}" ${v === selected ? 'selected' : ''}>${escapeHtml(label)}</option>`).join('');
 }
 
 function addPatientRow(stt = '', name = '', combo = '', priorityDischarge = false) {
@@ -361,7 +363,12 @@ function renderResults(containerSel, result) {
       const machineName = machineNameOf(e);
       return `${hhmm(e.start)}-${hhmm(e.end)} <b>${procNameOf(e)}</b>${machineName ? ' (' + escapeHtml(machineName) + ')' : ''} — ${staffList}`;
     }).join('<br>');
-    byPatientHtml += `<tr><td>${p.stt}</td><td>${escapeHtml(p.name)}</td><td>${comboPillHtml(combo)}</td><td>${detail || '<span class="muted">Chưa xếp được thủ thuật nào</span>'}</td></tr>`;
+    // Bệnh nhân "giữ chỗ" (BNM buổi sáng/chiều — suất để dành cho người mới
+    // nhập viện thêm sau) hiển thị mờ + có nhãn riêng để phân biệt rõ với
+    // bệnh nhân thật, tránh CEO tưởng nhầm là danh sách bị dư người.
+    const rowStyle = p.is_placeholder ? ' style="opacity:.65;font-style:italic;"' : '';
+    const placeholderBadge = p.is_placeholder ? ' <span class="badge-role" title="Suất để dành cho bệnh nhân mới nhập viện thêm sau — dùng nút &quot;+ Thêm 1 dòng&quot; để thay bằng người thật">giữ chỗ</span>' : '';
+    byPatientHtml += `<tr${rowStyle}><td>${p.stt}</td><td>${escapeHtml(p.name)}${placeholderBadge}</td><td>${comboPillHtml(combo)}</td><td>${detail || '<span class="muted">Chưa xếp được thủ thuật nào</span>'}</td></tr>`;
   }
   byPatientHtml += '</tbody></table></div>';
 
