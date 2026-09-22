@@ -482,23 +482,24 @@ function renderResults(result) {
   </div>`;
 
   html += `<div class="toolbar">
-    <button class="btn btn-primary btn-sm" id="btn-export-excel">⬇ Tải Excel đầy đủ (4 sheet)</button>
-    <span class="muted">File tải về gồm: Chấm công theo ngày · Chi tiết hoạt động · Cảnh báo · Ghi chú &amp; căn cứ pháp lý.</span>
+    <button class="btn btn-primary btn-sm" id="btn-export-excel">⬇ Tải Excel đầy đủ (5 sheet)</button>
+    <span class="muted">File tải về gồm: Chấm công chi tiết · Chấm công rút gọn · Chi tiết hoạt động · Cảnh báo · Ghi chú &amp; căn cứ pháp lý.</span>
   </div>`;
 
   if (missingPerformer > 0) {
     html += `<div class="info-box" style="display:block;">Sổ thủ thuật có ${missingPerformer} dòng không xác định được người thực hiện (cả "TTV chính" và "TTV phụ" đều trống) — các dòng này không được tính vào bảng chấm công.</div>`;
   }
 
-  // ---- Bảng chấm công ----
-  html += `<div class="panel"><h3>Bảng chấm công theo ngày</h3><div class="matrix-wrap"><table><thead><tr>
+  // ---- Bảng chấm công chi tiết (giờ sớm nhất - muộn nhất mỗi ngày) ----
+  html += `<div class="panel"><h3>Bảng chấm công chi tiết theo ngày</h3><p class="muted" style="margin-top:0;">Mỗi ô: giờ SỚM NHẤT - MUỘN NHẤT ghi nhận được từ dữ liệu 3 file, trong ngày đó.</p><div class="matrix-wrap"><table><thead><tr>
     <th>Họ tên</th><th>Số ngày công</th><th>Số lượt HĐ</th><th>Vai trò ghi nhận</th><th>Cảnh báo CAO</th>`;
   for (let d = 1; d <= daysInMonth; d++) html += `<th>${pad2(d)}</th>`;
   html += `</tr></thead><tbody>`;
+  let simpleRowsHtml = '';
   for (const person of persons) {
     let nDays = 0, nEvents = 0, nHighWarn = 0;
     const roles = new Set();
-    let rowCells = '';
+    let rowCells = '', rowCellsSimple = '';
     for (let d = 1; d <= daysInMonth; d++) {
       const dateKey = `${year}-${pad2(month)}-${pad2(d)}`;
       const evs = byPersonDay.get(`${person}|${dateKey}`);
@@ -510,13 +511,22 @@ function renderResults(result) {
         const isWarn = warnCaoCells.has(`${person}|${dateKey}`);
         if (isWarn) nHighWarn++;
         rowCells += `<td${isWarn ? ' class="cell-warn"' : ''}>${cellTxt}</td>`;
+        rowCellsSimple += `<td${isWarn ? ' class="cell-warn"' : ''}>1</td>`;
       } else {
         rowCells += `<td></td>`;
+        rowCellsSimple += `<td></td>`;
       }
     }
     html += `<tr><td>${escapeHtml(reg.displayName(person))}</td><td>${nDays}</td><td>${nEvents}</td><td><span class="badge-role">${escapeHtml([...roles].sort().join(', '))}</span></td><td>${nHighWarn ? `<span class="pill pill-cao">${nHighWarn}</span>` : '0'}</td>${rowCells}</tr>`;
+    simpleRowsHtml += `<tr><td>${escapeHtml(reg.displayName(person))}</td><td>${nDays}</td>${rowCellsSimple}</tr>`;
   }
   html += `</tbody></table></div></div>`;
+
+  // ---- Bảng chấm công rút gọn (chỉ đánh dấu 1 = có đi làm) ----
+  html += `<div class="panel"><h3>Bảng chấm công rút gọn theo ngày</h3><p class="muted" style="margin-top:0;">Đánh dấu "1" cho mọi ngày có ghi nhận hoạt động — dùng nhanh để đếm công, không có thông tin giờ giấc.</p><div class="matrix-wrap"><table><thead><tr>
+    <th>Họ tên</th><th>Tổng ngày công</th>`;
+  for (let d = 1; d <= daysInMonth; d++) html += `<th>${pad2(d)}</th>`;
+  html += `</tr></thead><tbody>${simpleRowsHtml}</tbody></table></div></div>`;
 
   // ---- Cảnh báo đang hoạt động ----
   const sevOrder = { CAO: 0, 'TRUNG BÌNH': 1 };
@@ -587,7 +597,7 @@ function renderResults(result) {
 }
 
 // ---------------------------------------------------------------------------
-// XUẤT EXCEL (4 sheet, dữ liệu thuần — không tô màu, giống quy ước xuất Excel
+// XUẤT EXCEL (5 sheet, dữ liệu thuần — không tô màu, giống quy ước xuất Excel
 // hiện có của module Chia thủ thuật)
 // ---------------------------------------------------------------------------
 function exportExcel(result) {
@@ -598,18 +608,28 @@ function exportExcel(result) {
   for (const w of warnings) w.review = reviewsMap.get(reviewKey(w.person, w.cat)) || null;
   const warnCaoCells = new Set(warnings.filter((w) => w.sev === 'CAO' && !(w.review && w.review.decision === 'dismissed')).map((w) => `${w.person}|${w.dateKey}`));
 
-  // Sheet 1
+  // Sheet 1 — chấm công CHI TIẾT (giờ sớm nhất - muộn nhất mỗi ngày)
   const s1 = [];
-  s1.push([`BẢNG CHẤM CÔNG Y SĨ - BÁC SĨ THÁNG ${pad2(month)}/${year} - PHÒNG KHÁM ĐA KHOA VIỆT PHÁP`]);
-  s1.push(['Dữ liệu tái tạo từ 3 báo cáo HIS. Đây là GIỜ HOẠT ĐỘNG GHI NHẬN TRÊN HỆ THỐNG, không thay thế máy chấm công vân tay/camera - xem sheet 4.GhiChu trước khi dùng để tính lương.']);
+  s1.push([`BẢNG CHẤM CÔNG CHI TIẾT - Y SĨ/BÁC SĨ THÁNG ${pad2(month)}/${year} - PHÒNG KHÁM ĐA KHOA VIỆT PHÁP`]);
+  s1.push(['Mỗi ô: giờ SỚM NHẤT - MUỘN NHẤT ghi nhận được từ dữ liệu 3 file, trong ngày đó. Đây là GIỜ HOẠT ĐỘNG GHI NHẬN TRÊN HỆ THỐNG, không thay thế máy chấm công vân tay/camera - xem sheet 5.GhiChu trước khi dùng để tính lương.']);
   s1.push([]);
   const header1 = ['Họ tên', 'Số ngày công', 'Số lượt hoạt động', 'Vai trò ghi nhận', 'Cảnh báo CAO'];
   for (let d = 1; d <= daysInMonth; d++) header1.push(pad2(d));
   s1.push(header1);
+
+  // Sheet 2 — chấm công RÚT GỌN (chỉ đánh dấu 1 = có đi làm, không có giờ giấc)
+  const s1b = [];
+  s1b.push([`BẢNG CHẤM CÔNG RÚT GỌN - Y SĨ/BÁC SĨ THÁNG ${pad2(month)}/${year} - PHÒNG KHÁM ĐA KHOA VIỆT PHÁP`]);
+  s1b.push(['Đánh dấu "1" cho mọi ngày có ghi nhận hoạt động trên hệ thống — dùng nhanh để đếm công, không có thông tin giờ giấc.']);
+  s1b.push([]);
+  const header1b = ['Họ tên', 'Tổng ngày công'];
+  for (let d = 1; d <= daysInMonth; d++) header1b.push(pad2(d));
+  s1b.push(header1b);
+
   for (const person of persons) {
     let nDays = 0, nEvents = 0, nHighWarn = 0;
     const roles = new Set();
-    const dayCells = [];
+    const dayCells = [], dayCellsSimple = [];
     for (let d = 1; d <= daysInMonth; d++) {
       const dateKey = `${year}-${pad2(month)}-${pad2(d)}`;
       const evs = byPersonDay.get(`${person}|${dateKey}`);
@@ -618,22 +638,25 @@ function exportExcel(result) {
         evs.forEach((e) => roles.add(e.role));
         const times = evs.filter((e) => e.start).map((e) => e.start);
         dayCells.push(times.length ? `${hhmm(new Date(Math.min(...times.map((t) => t.getTime()))))}-${hhmm(new Date(Math.max(...times.map((t) => t.getTime()))))}` : 'x');
+        dayCellsSimple.push(1);
         if (warnCaoCells.has(`${person}|${dateKey}`)) nHighWarn++;
       } else {
         dayCells.push('');
+        dayCellsSimple.push('');
       }
     }
     s1.push([reg.displayName(person), nDays, nEvents, [...roles].sort().join(', '), nHighWarn, ...dayCells]);
+    s1b.push([reg.displayName(person), nDays, ...dayCellsSimple]);
   }
 
-  // Sheet 2
+  // Sheet 3
   const s2 = [['Họ tên', 'Ngày', 'Giờ bắt đầu', 'Giờ kết thúc', 'Vai trò', 'Nguồn dữ liệu', 'Mã bệnh nhân/KCB', 'Khoa/Phòng', 'Nội dung']];
   const eventsSorted = events.slice().sort((a, b) => reg.displayName(a.person).localeCompare(reg.displayName(b.person), 'vi') || a.dateKey.localeCompare(b.dateKey) || (a.start && b.start ? a.start - b.start : 0));
   for (const e of eventsSorted) {
     s2.push([reg.displayName(e.person), ddmmyyyy(e.dateKey), e.start ? hhmm(e.start) : '', e.end ? hhmm(e.end) : '', e.role, e.source, e.patient ? String(e.patient) : '', e.dept || '', e.detail || '']);
   }
 
-  // Sheet 3 — bao gồm CẢ cảnh báo đã bỏ qua (có ghi rõ trạng thái + lý do) để
+  // Sheet 4 — bao gồm CẢ cảnh báo đã bỏ qua (có ghi rõ trạng thái + lý do) để
   // giữ đầy đủ dấu vết audit, không âm thầm biến mất khỏi hồ sơ xuất ra.
   const s3 = [['Mức độ', 'Loại cảnh báo', 'Họ tên', 'Ngày', 'Chi tiết', 'Trạng thái xem xét', 'Lý do / người xem xét', 'Khuyến nghị xử lý']];
   const RECOMMEND = {
@@ -656,7 +679,7 @@ function exportExcel(result) {
   s3.push([]);
   s3.push([`Đang hoạt động: ${activeForCount.length} (Cao: ${nCao} | Trung bình: ${nTb})  ·  Đã xem xét & bỏ qua: ${nDismissed}  ·  Tổng phát hiện: ${warnings.length}`]);
 
-  // Sheet 4
+  // Sheet 5
   const s4lines = [
     'BẢNG CHẤM CÔNG Y SĨ - BÁC SĨ - GHI CHÚ PHƯƠNG PHÁP & CĂN CỨ PHÁP LÝ', '',
     '1. NGUỒN DỮ LIỆU',
@@ -670,15 +693,16 @@ function exportExcel(result) {
     '3. CĂN CỨ PHÁP LÝ / QUY ĐỊNH THAM CHIẾU (BHYT)',
     '  - Luật BHYT 2008 (sửa đổi, bổ sung 2014, 2024) và Nghị định 146/2018/NĐ-CP: quy định điều kiện thanh toán chi phí KCB BHYT, trách nhiệm của cơ sở KCB trong ghi chép, lưu trữ hồ sơ làm căn cứ quyết toán.',
     '  - Thông tư 09/2019/TT-BYT và các văn bản hướng dẫn giám định BHYT: cơ quan BHXH có thể từ chối/xuất toán các dịch vụ có dấu hiệu trùng giờ, thời gian thực hiện không đảm bảo tối thiểu, hoặc hồ sơ thiếu thông tin người thực hiện.',
-    '  - Để phòng tránh nguy cơ xuất toán: đối chiếu dữ liệu HIS với máy chấm công / lịch trực / chữ ký bác sĩ trước khi gửi hồ sơ đề nghị thanh toán BHYT hàng tháng, đặc biệt với các dòng mức CAO trong sheet 3.CanhBao.',
+    '  - Để phòng tránh nguy cơ xuất toán: đối chiếu dữ liệu HIS với máy chấm công / lịch trực / chữ ký bác sĩ trước khi gửi hồ sơ đề nghị thanh toán BHYT hàng tháng, đặc biệt với các dòng mức CAO trong sheet 4.CanhBao.',
   ];
   const s4 = s4lines.map((line) => [line]);
 
   const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(s1), '1.ChamCong');
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(s2), '2.ChiTietHoatDong');
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(s3), '3.CanhBao');
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(s4), '4.GhiChu');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(s1), '1.ChamCongChiTiet');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(s1b), '2.ChamCongRutGon');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(s2), '3.ChiTietHoatDong');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(s3), '4.CanhBao');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(s4), '5.GhiChu');
   XLSX.writeFile(wb, `cham-cong-y-si-bac-si-${pad2(month)}-${year}.xlsx`);
 }
 

@@ -32,11 +32,12 @@ chỉ tồn tại trên máy đang mở trình duyệt, cho đến khi bấm t�
 2. Đăng nhập `cham-cong/index.html`.
 3. Ở tab **"Chấm công"**, tải lần lượt 3 file vào đúng 3 ô ① ② ③.
 4. Bấm **"⚙ Xử lý & lập bảng chấm công"**. Sau vài giây, kết quả hiện ngay:
-   - Bảng chấm công theo ngày (giờ hoạt động đầu-cuối mỗi người mỗi ngày).
+   - Bảng chấm công **chi tiết** (giờ hoạt động sớm nhất - muộn nhất mỗi người mỗi ngày).
+   - Bảng chấm công **rút gọn** (chỉ đánh dấu "1" cho ngày có đi làm — dùng nhanh để đếm công).
    - Danh sách cảnh báo nghi vấn, xếp theo mức độ CAO trước.
-5. Bấm **"⬇ Tải Excel đầy đủ (4 sheet)"** để lưu lại hồ sơ: Chấm công theo
-   ngày · Chi tiết hoạt động (nhật ký từng lượt) · Cảnh báo · Ghi chú & căn
-   cứ pháp lý.
+5. Bấm **"⬇ Tải Excel đầy đủ (5 sheet)"** để lưu lại hồ sơ: Chấm công chi
+   tiết · Chấm công rút gọn · Chi tiết hoạt động (nhật ký từng lượt) · Cảnh
+   báo · Ghi chú & căn cứ pháp lý.
 6. Với mọi dòng cảnh báo mức **CAO**, đối chiếu lại hồ sơ giấy/camera trước
    khi gửi hồ sơ đề nghị thanh toán BHYT.
 
