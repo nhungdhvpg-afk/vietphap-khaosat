@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bảng chấm công Y sĩ - Bác sĩ — Việt Pháp</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+  :root{
+    --cream:#F6F8F3; --cream-2:#EDF2E7; --dark:#0E6B24; --dark-2:#073C14;
+    --gold:#D9A441; --gold-deep:#B9832E; --green-soft:#E5F3E6; --green-text:#0E5A20;
+    --red-soft:#FBE9E7; --red-text:#A13327; --brand-red:#D42A1F;
+    --amber-soft:#FFF4D6; --amber-text:#8A6300;
+    --ink:#20241F; --ink-mute:#666B5F; --line:#DCE3D6;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;background:var(--cream);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+  a{color:var(--dark);}
+  .topbar{display:flex;align-items:center;gap:12px;padding:14px 20px;background:#fff;border-bottom:1px solid var(--line);position:sticky;top:0;z-index:20;}
+  .topbar b{color:var(--dark);font-size:16px;}
+  .topbar span{color:var(--ink-mute);font-size:12.5px;}
+  .topbar .spacer{flex:1;}
+  .container{max-width:1280px;margin:0 auto;padding:20px;}
+  .login-wrap{max-width:380px;margin:80px auto;background:#fff;border:1px solid var(--line);border-radius:14px;padding:28px;}
+  .login-wrap h2{margin:0 0 4px;color:var(--dark);}
+  .login-wrap p{color:var(--ink-mute);font-size:13px;margin:0 0 18px;}
+  label{display:block;font-size:12.5px;font-weight:600;color:var(--ink-mute);margin:10px 0 4px;}
+  input[type=text], input[type=email], input[type=password], input[type=number], input[type=file], select{
+    width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:8px;font-size:14px;background:#fff;color:var(--ink);
+  }
+  .btn{display:inline-flex;align-items:center;gap:6px;padding:9px 16px;border-radius:9px;border:1px solid var(--line);background:#fff;color:var(--ink);font-weight:700;font-size:13.5px;cursor:pointer;}
+  .btn-primary{background:var(--dark);border-color:var(--dark);color:#fff;}
+  .btn-primary:hover{background:var(--dark-2);}
+  .btn-gold{background:var(--gold);border-color:var(--gold-deep);color:#20241F;}
+  .btn-sm{padding:6px 10px;font-size:12.5px;border-radius:7px;}
+  .btn:disabled{opacity:0.5;cursor:not-allowed;}
+  .error-box{background:var(--red-soft);color:var(--red-text);padding:10px 12px;border-radius:8px;font-size:13px;margin-top:10px;display:none;}
+  .info-box{background:var(--green-soft);color:var(--green-text);padding:10px 12px;border-radius:8px;font-size:13px;margin-top:10px;display:none;}
+  .panel{background:#fff;border:1px solid var(--line);border-radius:14px;padding:18px 20px;margin-bottom:18px;}
+  .panel h3{margin:0 0 12px;font-size:15px;color:var(--dark);}
+  .panel p.muted{color:var(--ink-mute);font-size:12.5px;}
+  .row{display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end;}
+  .row > div{flex:1;min-width:200px;}
+  table{width:100%;border-collapse:collapse;font-size:12.5px;}
+  th,td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top;}
+  th{background:var(--cream-2);color:var(--ink-mute);font-size:11px;text-transform:uppercase;letter-spacing:.03em;position:sticky;top:0;}
+  tr:hover td{background:#FAFCF8;}
+  .kpi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:6px;}
+  .kpi{background:var(--cream-2);border-radius:10px;padding:12px 14px;}
+  .kpi .v{font-size:22px;font-weight:800;color:var(--dark);}
+  .kpi .v.warn{color:var(--red-text);}
+  .kpi .l{font-size:11.5px;color:var(--ink-mute);}
+  .tabs{display:flex;gap:4px;background:#fff;border:1px solid var(--line);border-radius:999px;padding:3px;width:fit-content;margin-bottom:14px;}
+  .tabs button{border:none;background:none;padding:7px 16px;border-radius:999px;font-weight:700;font-size:12.5px;color:var(--ink-mute);cursor:pointer;}
+  .tabs button.active{background:var(--dark);color:#fff;}
+  .tabview{display:none;}
+  .tabview.active{display:block;}
+  .pill{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:700;}
+  .pill-cao{background:var(--red-soft);color:var(--red-text);}
+  .pill-tb{background:var(--amber-soft);color:var(--amber-text);}
+  .cell-warn{background:var(--red-soft) !important;}
+  .matrix-wrap{overflow:auto;max-height:70vh;border:1px solid var(--line);border-radius:10px;}
+  .matrix-wrap table{font-size:11.5px;}
+  .matrix-wrap td, .matrix-wrap th{white-space:nowrap;padding:5px 7px;}
+  .matrix-wrap th:first-child, .matrix-wrap td:first-child{position:sticky;left:0;background:#fff;z-index:5;border-right:1px solid var(--line);}
+  .matrix-wrap th:first-child{background:var(--cream-2);z-index:6;}
+  .badge-role{display:inline-block;padding:1px 6px;border-radius:5px;font-size:10.5px;font-weight:700;background:var(--cream-2);color:var(--ink-mute);}
+  .muted{color:var(--ink-mute);font-size:12px;}
+  .toolbar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;align-items:center;}
+  .del-row{color:var(--red-text);cursor:pointer;font-weight:700;}
+  .upload-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;}
+  @media (max-width:900px){.upload-grid{grid-template-columns:1fr;}}
+  .file-slot{border:1px dashed var(--line);border-radius:10px;padding:12px;background:var(--cream-2);}
+  .file-slot.ready{border-color:var(--dark);background:var(--green-soft);}
+  .file-slot .fname{font-size:12px;color:var(--ink-mute);margin-top:6px;word-break:break-all;}
+  .spinner{display:inline-block;width:14px;height:14px;border:2px solid var(--line);border-top-color:var(--dark);border-radius:50%;animation:spin 0.8s linear infinite;vertical-align:middle;margin-right:6px;}
+  @keyframes spin{to{transform:rotate(360deg);}}
+</style>
+</head>
+<body>
+
+  <div class="topbar no-print">
+    <b>📋 Bảng chấm công Y sĩ - Bác sĩ · Việt Pháp</b>
+    <span>Tự động tổng hợp từ 3 báo cáo HIS + cảnh báo nguy cơ xuất toán BHYT</span>
+    <div class="spacer"></div>
+    <a href="../index.html" style="font-size:12.5px;">← Về trang khảo sát</a>
+    <button class="btn btn-sm" id="btn-logout" style="display:none;">Đăng xuất</button>
+  </div>
+
+  <div id="view-login" class="login-wrap">
+    <h2>Đăng nhập</h2>
+    <p>Dùng tài khoản được CEO cấp riêng cho module Bảng chấm công (email + mật khẩu tạm). Tài khoản module Chia thủ thuật/Khảo sát KHÔNG dùng chung được ở đây trừ khi là CEO.</p>
+    <label>Email</label>
+    <input type="email" id="login-email" autocomplete="username" placeholder="ten@vietphapclinic.vn">
+    <label>Mật khẩu</label>
+    <input type="password" id="login-password" autocomplete="current-password">
+    <div class="error-box" id="login-error"></div>
+    <button class="btn btn-primary" id="login-submit" style="margin-top:16px;width:100%;">Đăng nhập</button>
+  </div>
+
+  <div id="view-main" class="container" style="display:none;">
+
+    <div class="tabs no-print">
+      <button data-tab="chamcong" class="active">Chấm công</button>
+      <button data-tab="caidat">Cài đặt</button>
+    </div>
+
+    <!-- ============ TAB: CHẤM CÔNG ============ -->
+    <div class="tabview active" id="tab-chamcong">
+      <div class="panel no-print">
+        <h3>1. Tải lên 3 báo cáo HIS của kỳ cần chấm công</h3>
+        <p class="muted" style="margin-top:0;">Toàn bộ xử lý chạy NGAY TRONG TRÌNH DUYỆT — file và dữ liệu bệnh nhân không được gửi lên server/lưu ở đâu cả.</p>
+        <div class="upload-grid">
+          <div class="file-slot" id="slot-1">
+            <label style="margin:0;">① Bảng kê chi phí chi tiết</label>
+            <input type="file" id="file-1" accept=".xlsx">
+            <div class="fname" id="fname-1">Chưa chọn file</div>
+          </div>
+          <div class="file-slot" id="slot-2">
+            <label style="margin:0;">② Sổ kết quả CLS theo bác sĩ</label>
+            <input type="file" id="file-2" accept=".xlsx">
+            <div class="fname" id="fname-2">Chưa chọn file</div>
+          </div>
+          <div class="file-slot" id="slot-3">
+            <label style="margin:0;">③ Sổ thủ thuật trong ngày làm</label>
+            <input type="file" id="file-3" accept=".xlsx">
+            <div class="fname" id="fname-3">Chưa chọn file</div>
+          </div>
+        </div>
+        <div class="error-box" id="process-error"></div>
+        <button class="btn btn-primary" id="btn-process" style="margin-top:16px;" disabled>⚙ Xử lý & lập bảng chấm công</button>
+        <span class="muted" id="process-status" style="margin-left:10px;"></span>
+      </div>
+
+      <div id="results-wrap"></div>
+    </div>
+
+    <!-- ============ TAB: CÀI ĐẶT ============ -->
+    <div class="tabview" id="tab-caidat">
+      <div class="panel" id="panel-accounts" style="display:none;">
+        <h3>Quản lý tài khoản đăng nhập (riêng cho module này)</h3>
+        <p class="muted" style="margin-top:0;">Chỉ CEO thấy mục này. Tài khoản tạo ở đây có vai trò "cham_cong_staff" — CHỈ dùng được module Bảng chấm công, không tự động có quyền vào Chia thủ thuật hay dashboard Khảo sát.</p>
+        <table><thead><tr><th>Email</th><th style="width:150px;">Quản lý Cài đặt</th><th style="width:70px;"></th></tr></thead><tbody id="accounts-tbody"></tbody></table>
+        <div class="row" style="margin-top:14px;">
+          <div><label>Email</label><input type="email" id="new-acct-email" placeholder="ketoan@vietphapclinic.vn"></div>
+          <div style="max-width:170px;">
+            <label style="display:flex;align-items:center;gap:6px;font-weight:400;margin-top:8px;cursor:pointer;">
+              <input type="checkbox" id="new-acct-manager"> Được sửa Cài đặt
+            </label>
+          </div>
+          <div style="max-width:150px;"><button class="btn btn-primary btn-sm" id="btn-add-account">+ Tạo tài khoản</button></div>
+        </div>
+        <div class="error-box" id="account-error"></div>
+      </div>
+
+      <div class="panel">
+        <h3>Ghi chú phương pháp & căn cứ pháp lý</h3>
+        <p><b>Nguồn dữ liệu:</b> File 1 dùng cột <code>BacSi</code> + <code>Ngay_YL</code>; File 2 tách 2 vai trò "BS chỉ định" (Ngày lập) và "Bs đọc kết quả" (Ngày làm); File 3 dùng cột "Ngày/giờ TT" (dạng DD/MM/YYYY HH:MM-HH:MM).</p>
+        <p><b>Giả định quan trọng:</b> trong Sổ thủ thuật, cột "TTV chính" thường để trống — công cụ tự dùng "TTV phụ" làm người thực hiện chính khi "TTV chính" bỏ trống. Cần người phụ trách nhân sự xác nhận lại quy ước này còn đúng không.</p>
+        <p><b>"Giờ hoạt động"</b> là giờ đầu-cuối của các sự kiện hệ thống ghi nhận trong ngày — KHÔNG PHẢI giờ vào/ra qua máy chấm công thực tế. Chỉ dùng để rà soát/đối chiếu, không dùng trực tiếp để tính lương.</p>
+        <p><b>Căn cứ BHYT:</b> Luật BHYT 2008 (sửa đổi 2014, 2024) và Nghị định 146/2018/NĐ-CP; Thông tư 09/2019/TT-BYT và các hướng dẫn giám định BHYT — cơ quan BHXH có thể xuất toán dịch vụ có dấu hiệu 1 người hành nghề thực hiện 2 dịch vụ trùng giờ, thời gian thực hiện không đảm bảo tối thiểu, hoặc hồ sơ thiếu thông tin người thực hiện.</p>
+      </div>
+    </div>
+
+  </div>
+
+  <script src="../config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

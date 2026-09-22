@@ -13,12 +13,12 @@ async function getStaffFromRequest(req) {
 
   const { data: staff, error: staffError } = await supabaseAdmin
     .from('staff_accounts')
-    .select('id, email, role, department, ctt_manager')
+    .select('id, email, role, department, ctt_manager, cham_cong_manager')
     .eq('id', userData.user.id)
     .maybeSingle();
   if (staffError || !staff) return null;
 
-  return staff; // { id, email, role, department, ctt_manager }
+  return staff; // { id, email, role, department, ctt_manager, cham_cong_manager }
 }
 
 /** Có quyền sửa Cài đặt của module Chia thủ thuật (nhân sự/máy móc/giờ ca...)
@@ -29,4 +29,19 @@ function isCttManager(staffAcct) {
   return !!staffAcct && (staffAcct.role === 'ceo' || staffAcct.ctt_manager === true);
 }
 
-module.exports = { getStaffFromRequest, isCttManager };
+/** Có quyền VÀO module "Bảng chấm công" hay không: CEO luôn vào được; ngoài
+ * ra tài khoản role='cham_cong_staff' hoặc được đánh dấu cham_cong_manager=true
+ * cũng vào được. Một tài khoản ctt_staff/department_head thường KHÔNG vào
+ * được module này (và ngược lại) — đây là điểm khác với Chia thủ thuật, nơi
+ * module đó mở cho mọi tài khoản đã đăng nhập. */
+function canAccessChamCong(staffAcct) {
+  return !!staffAcct && (staffAcct.role === 'ceo' || staffAcct.role === 'cham_cong_staff' || staffAcct.cham_cong_manager === true);
+}
+
+/** Có quyền sửa Cài đặt (ngưỡng cảnh báo, quản lý tài khoản) của module
+ * "Bảng chấm công" hay không: CEO luôn có toàn quyền. */
+function isChamCongManager(staffAcct) {
+  return !!staffAcct && (staffAcct.role === 'ceo' || staffAcct.cham_cong_manager === true);
+}
+
+module.exports = { getStaffFromRequest, isCttManager, canAccessChamCong, isChamCongManager };
