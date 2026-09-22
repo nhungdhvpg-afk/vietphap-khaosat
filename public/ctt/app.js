@@ -384,11 +384,16 @@ function renderResults(containerSel, result) {
       return `${hhmm(e.start)}-${hhmm(e.end)} <b>${procNameOf(e)}</b>${machineName ? ' (' + escapeHtml(machineName) + ')' : ''} — ${staffList}`;
     }).join('<br>');
     // Bệnh nhân "giữ chỗ" (BNM buổi sáng/chiều — suất để dành cho người mới
-    // nhập viện thêm sau) hiển thị mờ + có nhãn riêng để phân biệt rõ với
-    // bệnh nhân thật, tránh CEO tưởng nhầm là danh sách bị dư người.
-    const rowStyle = p.is_placeholder ? ' style="opacity:.65;font-style:italic;"' : '';
-    const placeholderBadge = p.is_placeholder ? ' <span class="badge-role" title="Suất để dành cho bệnh nhân mới nhập viện thêm sau — dùng nút &quot;+ Thêm 1 dòng&quot; để thay bằng người thật">giữ chỗ</span>' : '';
-    byPatientHtml += `<tr${rowStyle}><td>${p.stt}</td><td>${escapeHtml(p.name)}${placeholderBadge}</td><td>${comboPillHtml(combo)}</td><td>${detail || '<span class="muted">Chưa xếp được thủ thuật nào</span>'}</td></tr>`;
+    // nhập viện thêm sau) tô MỰC ĐỎ (nền đỏ nhạt + chữ đỏ đậm) cho dễ nhìn,
+    // phân biệt rõ ngay từ xa với bệnh nhân thật khi lướt bảng hoặc in giấy.
+    const isEmpty = myEntries.length === 0;
+    // Bệnh nhân CHƯA xếp được thủ thuật nào (vượt khung giờ/hết chỗ) — cũng
+    // tô mực đỏ để nổi bật, dễ phát hiện ngay thay vì chữ xám mờ dễ bỏ sót.
+    const rowStyle = (p.is_placeholder || isEmpty) ? ' style="background:var(--red-soft);"' : '';
+    const nameHtml = p.is_placeholder ? `<b style="color:var(--red-text);">${escapeHtml(p.name)}</b>` : escapeHtml(p.name);
+    const placeholderBadge = p.is_placeholder ? ' <span class="pill pill-warn" title="Suất để dành cho bệnh nhân mới nhập viện thêm sau — dùng nút &quot;+ Thêm 1 dòng&quot; để thay bằng người thật">giữ chỗ</span>' : '';
+    const detailHtml = isEmpty ? '<b style="color:var(--red-text);">⚠ Chưa xếp được thủ thuật nào — cần hẹn ngày khác</b>' : detail;
+    byPatientHtml += `<tr${rowStyle}><td>${p.stt}</td><td>${nameHtml}${placeholderBadge}</td><td>${comboPillHtml(combo)}</td><td>${detailHtml}</td></tr>`;
   }
   byPatientHtml += '</tbody></table></div>';
 
