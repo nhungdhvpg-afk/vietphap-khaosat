@@ -3,6 +3,7 @@
 const { getSupabaseAdmin } = require('./_lib/supabaseAdmin');
 const { getStaffFromRequest } = require('./_lib/auth');
 const { loadCttConfig } = require('./_lib/cttConfig');
+const { estimateRemainingCapacity, minutesToHHMM } = require('./_lib/cttScheduler');
 
 module.exports = async (req, res) => {
   if (req.method !== 'GET') {
@@ -36,7 +37,7 @@ module.exports = async (req, res) => {
       .eq('date', date);
     if (schedulesError) throw schedulesError;
 
-    const { raw, duplicateStaffNames } = await loadCttConfig();
+    const { raw, schedulerConfig, duplicateStaffNames } = await loadCttConfig();
     const procById = Object.fromEntries(raw.procedures.map((p) => [p.id, p]));
     const staffById = Object.fromEntries(raw.staff.map((s) => [s.id, s]));
     const machineById = Object.fromEntries(raw.machines.map((m) => [m.id, m]));
@@ -107,7 +108,18 @@ module.exports = async (req, res) => {
       const used = machineUsedMinutes[m.id] || 0;
       return { machineId: m.id, name: m.name, type: m.type, usedMinutes: used, capacityMinutes, utilizationPct: capacityMinutes ? Math.round((used / capacityMinutes) * 1000) / 10 : 0 };
     });
-    const summary = { totalPatients, completedPatients: totalPatients - incompletePatients, incompletePatients, comboCount, procedureCount, machineUtilization };
+    // Còn nhận thêm được bao nhiêu người mỗi buổi — dùng khi CEO/nhân viên mở
+    // lại 1 ngày cũ (không chia mới) rồi muốn dùng "+ Thêm 1 dòng" thêm bệnh
+    // nhân mới nhập viện ngay lúc đó.
+    const { data: reserveRow } = await db.from('ctt_reserved_slots').select('morning_slots, afternoon_slots').eq('date', date).maybeSingle();
+    const reservedByShift = [reserveRow?.morning_slots || 0, reserveRow?.afternoon_slots || 0];
+    const shiftCapacity = schedulerConfig.shifts.map((s, i) => {
+      const examCounter = new Set(scheduleEntries.filter((e) => e.start >= s.start && e.start < s.end).map((e) => e.patientId)).size;
+      const cap = estimateRemainingCapacity(schedulerConfig, scheduleEntries, i, examCounter);
+      return { start: s.start, end: s.end, startLabel: minutesToHHMM(s.start), endLabel: minutesToHHMM(s.end), reservedSlots: reservedByShift[i], remainingFit: cap.fit, remainingAtLeast: cap.atLeast };
+    });
+
+    const summary = { totalPatients, completedPatients: totalPatients - incompletePatients, incompletePatients, comboCount, procedureCount, machineUtilization, shiftCapacity };
 
     res.status(200).json({ date, patients, scheduleEntries, warnings, summary, duplicateStaffNames });
   } catch (e) {

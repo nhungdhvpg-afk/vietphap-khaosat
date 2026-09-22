@@ -5,7 +5,7 @@
 const { getSupabaseAdmin } = require('./_lib/supabaseAdmin');
 const { getStaffFromRequest } = require('./_lib/auth');
 const { loadCttConfig } = require('./_lib/cttConfig');
-const { generateSchedule } = require('./_lib/cttScheduler');
+const { generateSchedule, estimateRemainingCapacity, minutesToHHMM } = require('./_lib/cttScheduler');
 
 module.exports = async (req, res) => {
   if (req.method !== 'POST') {
@@ -42,7 +42,7 @@ module.exports = async (req, res) => {
         return;
       }
       seenStt.add(stt);
-      cleanPatients.push({ stt, name: name.slice(0, 255), comboOverride: p.comboOverride || null });
+      cleanPatients.push({ stt, name: name.slice(0, 255), comboOverride: p.comboOverride || null, priorityDischarge: p.priorityDischarge === true });
     }
 
     const db = getSupabaseAdmin();
@@ -56,6 +56,28 @@ module.exports = async (req, res) => {
       return;
     }
 
+    // Số suất muốn dành cho bệnh nhân mới nhập viện thêm sau (sáng/chiều) —
+    // nếu request này không truyền lên (VD chia lại cùng ngày mà không đổi ý
+    // định), dùng lại đúng giá trị đã lưu trước đó cho ngày này (hệ thống tự
+    // "ghi nhớ", không cần nhập lại mỗi lần).
+    let reservedMorning = 0;
+    let reservedAfternoon = 0;
+    if (req.body && req.body.reservedSlots && typeof req.body.reservedSlots === 'object') {
+      reservedMorning = Math.max(0, Math.floor(Number(req.body.reservedSlots.morning) || 0));
+      reservedAfternoon = Math.max(0, Math.floor(Number(req.body.reservedSlots.afternoon) || 0));
+      const { error: reserveErr } = await db
+        .from('ctt_reserved_slots')
+        .upsert({ date, morning_slots: reservedMorning, afternoon_slots: reservedAfternoon, updated_at: new Date().toISOString() });
+      if (reserveErr) throw reserveErr;
+    } else {
+      const { data: reserveRow } = await db.from('ctt_reserved_slots').select('morning_slots, afternoon_slots').eq('date', date).maybeSingle();
+      if (reserveRow) {
+        reservedMorning = reserveRow.morning_slots;
+        reservedAfternoon = reserveRow.afternoon_slots;
+      }
+    }
+    schedulerConfig.reservedSlotsByShift = [reservedMorning, reservedAfternoon];
+
     // Xoá dữ liệu cũ của ngày này (nếu có) để chia lại từ đầu.
     const { data: oldPatients } = await db.from('ctt_patients').select('id').eq('date', date);
     if (oldPatients && oldPatients.length) {
@@ -65,11 +87,11 @@ module.exports = async (req, res) => {
 
     const { data: insertedPatients, error: patientInsertError } = await db
       .from('ctt_patients')
-      .insert(cleanPatients.map((p) => ({ date, stt: p.stt, name: p.name, combo_override: p.comboOverride })))
-      .select('id, stt, name, combo_override');
+      .insert(cleanPatients.map((p) => ({ date, stt: p.stt, name: p.name, combo_override: p.comboOverride, priority_discharge: p.priorityDischarge })))
+      .select('id, stt, name, combo_override, priority_discharge');
     if (patientInsertError) throw patientInsertError;
 
-    const patientForScheduler = insertedPatients.map((p) => ({ id: p.id, stt: p.stt, name: p.name, comboOverride: p.combo_override }));
+    const patientForScheduler = insertedPatients.map((p) => ({ id: p.id, stt: p.stt, name: p.name, comboOverride: p.combo_override, priorityDischarge: p.priority_discharge }));
     const result = generateSchedule(schedulerConfig, patientForScheduler);
 
     const procIdByCode = Object.fromEntries(Object.values(schedulerConfig.procedures).map((p) => [p.code, p.id]));
@@ -131,12 +153,29 @@ module.exports = async (req, res) => {
       }
     }
 
+    // Mô phỏng thử xem THỰC SỰ còn nhận thêm được bao nhiêu người mỗi buổi
+    // (không chỉ dựa vào số suất đã dành ra — có thể ít/nhiều hơn tuỳ tải
+    // thực tế của ngày hôm đó), để CEO biết chính xác trước khi quyết định
+    // nhận thêm bệnh nhân mới.
+    const shiftCapacity = schedulerConfig.shifts.map((s, i) => {
+      const cap = estimateRemainingCapacity(schedulerConfig, result.scheduleEntries, i, result.summary.shiftCapacity[i].examCounter);
+      return {
+        start: s.start,
+        end: s.end,
+        startLabel: minutesToHHMM(s.start),
+        endLabel: minutesToHHMM(s.end),
+        reservedSlots: schedulerConfig.reservedSlotsByShift[i] || 0,
+        remainingFit: cap.fit,
+        remainingAtLeast: cap.atLeast,
+      };
+    });
+
     res.status(200).json({
       date,
       patients: insertedPatients,
       scheduleEntries: result.scheduleEntries,
       warnings: result.warnings,
-      summary: result.summary,
+      summary: { ...result.summary, shiftCapacity },
       config: schedulerConfig,
       duplicateStaffNames,
     });

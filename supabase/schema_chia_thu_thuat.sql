@@ -108,8 +108,18 @@ create table if not exists ctt_patients (
   stt          int not null,
   name         text not null,
   combo_override text, -- null = dùng phác đồ chuẩn tự động; hoặc mã combo ép buộc
+  priority_discharge boolean not null default false, -- true = cần ra viện hôm nay, ưu tiên khung giờ sớm nhất
   created_at   timestamptz not null default now(),
   unique (date, stt)
+);
+
+-- Số "suất" muốn chủ động để dành cho bệnh nhân mới nhập viện thêm sau (dùng
+-- nút "+ Thêm 1 dòng" sau khi đã chia lần đầu trong ngày).
+create table if not exists ctt_reserved_slots (
+  date            date primary key,
+  morning_slots   int not null default 0,
+  afternoon_slots int not null default 0,
+  updated_at      timestamptz not null default now()
 );
 
 -- ----------------------------------------------------------------------------
@@ -251,3 +261,4 @@ alter table ctt_settings enable row level security;
 alter table ctt_patients enable row level security;
 alter table ctt_schedules enable row level security;
 alter table ctt_schedule_staffs enable row level security;
+alter table ctt_reserved_slots enable row level security;

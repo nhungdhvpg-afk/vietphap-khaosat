@@ -146,7 +146,49 @@ function minutesToHHMM(mins) {
  * @returns {object} { scheduleEntries, warnings, summary }
  */
 function generateSchedule(config, patients) {
-  const { shifts, transferBufferMinutes = 2, procedures, staff, machines, comboLabels = {}, optimizationMode = 'max_xong' } = config;
+  const {
+    shifts: rawShifts,
+    transferBufferMinutes = 2,
+    procedures,
+    staff,
+    machines,
+    comboLabels = {},
+    optimizationMode = 'max_xong',
+    // Số "suất" muốn để dành cho bệnh nhân mới nhập viện thêm sau, tính theo
+    // từng buổi (mảng song song với `shifts`, VD [3, 2] = dành 3 suất sáng,
+    // 2 suất chiều) — ước lượng 1 suất ~ EXAM_PACING_MINUTES phút (đúng bằng
+    // nhịp khám tối đa của 1 bác sĩ khám), nên "dành N suất" tương đương thu
+    // hẹp giờ kết thúc khả dụng của buổi đó lại N*EXAM_PACING_MINUTES phút
+    // cho danh sách bệnh nhân "đã biết trước" — chỉ áp dụng cho lượt tự động
+    // xếp bình thường, KHÔNG áp dụng khi thêm 1 bệnh nhân cụ thể sau này
+    // (lúc đó dùng đúng khung giờ CÒN LẠI, xem forcedExamFloor bên dưới).
+    reservedSlotsByShift = null,
+    // Lịch đã CHỐT từ lần chia trước (nếu có) — dùng khi CHỈ thêm 1 bệnh nhân
+    // mới vào lịch đã có, KHÔNG được xếp lại những người đã có. Các mảng
+    // trạng thái tài nguyên bên dưới sẽ được "phát lại" (replay) từ đây
+    // TRƯỚC KHI xử lý `patients` — nghĩa là `patients` truyền vào trong
+    // trường hợp này CHỈ nên chứa (những) bệnh nhân MỚI, không lặp lại người
+    // đã có trong `existingScheduleEntries`.
+    existingScheduleEntries = [],
+    // Khi thêm 1 bệnh nhân cụ thể vào lịch đã có, người dùng tự chọn giờ bắt
+    // đầu mong muốn thay vì để hệ thống tự tính theo nhịp khám tuần tự — set
+    // giá trị này (số phút từ 00:00) để ép TOÀN BỘ bệnh nhân trong `patients`
+    // không được bắt đầu sớm hơn mốc này, bỏ qua bộ đếm nhịp khám tự động.
+    forcedExamFloor = null,
+    // Giá trị KHỞI ĐẦU của bộ đếm nhịp khám mỗi buổi (mảng song song với
+    // `shifts`) — dùng khi cần "nối tiếp" đúng nhịp khám từ 1 lượt chạy
+    // TRƯỚC đó (VD lượt chạy thử "còn nhận thêm được bao nhiêu người", chạy
+    // nối tiếp ngay sau lượt chia thật, không được để nhịp khám reset về 0
+    // rồi tính sai). Mặc định 0 cho mỗi buổi (hành vi cũ, không đổi).
+    initialExamCounters = null,
+  } = config;
+
+  const reservedByShift = reservedSlotsByShift || rawShifts.map(() => 0);
+  // Giờ kết thúc "khả dụng" cho lượt xếp TỰ ĐỘNG bình thường — thu hẹp lại
+  // theo số suất muốn dành ra; giờ kết thúc THẬT (rawShifts) chỉ dùng để báo
+  // cáo "còn nhận thêm được bao nhiêu người" ở cuối hàm, không dùng để xếp.
+  const shifts = rawShifts.map((s, i) => ({ start: s.start, end: s.end - (reservedByShift[i] || 0) * EXAM_PACING_MINUTES }));
+
   // Mỗi bệnh nhân PHẢI hoàn tất cả 4 bước TRONG CÙNG 1 buổi (đến 1 lần, làm
   // xong rồi về — không quay lại buổi sau). `activeShifts` là buổi đang được
   // thử cho bệnh nhân hiện tại; mọi hàm tìm chỗ trống bên dưới đều tra cứu
@@ -222,6 +264,37 @@ function generateSchedule(config, patients) {
   const staffWorkMinutes = new Map(staff.map((s) => [s.id, 0]));
   const machineUsedMinutes = new Map(machines.map((m) => [m.id, 0]));
   const comboCount = {};
+
+  // ---- "Phát lại" lịch đã CHỐT từ lần chia trước (nếu có) ----
+  // Chỉ dùng khi thêm bệnh nhân MỚI vào lịch đã có sẵn — nạp lại đúng những
+  // khoảng tài nguyên đã bị chiếm bởi các lượt CŨ, để thuật toán biết mà
+  // tránh, nhưng KHÔNG chạy lại logic xếp lịch cho những người cũ đó (nên
+  // giờ giấc/nhân sự của họ tuyệt đối không đổi).
+  {
+    const countedComboPatientIds = new Set();
+    for (const oldEntry of existingScheduleEntries) {
+      scheduleEntries.push({ ...oldEntry, staffAssignments: oldEntry.staffAssignments.map((a) => ({ ...a })) });
+      for (const a of oldEntry.staffAssignments) {
+        if (a.roleType === 'monitor') {
+          const mKey = oldEntry.procedureCode + ':' + a.staffId;
+          getMonitorIntervals(mKey).push({ start: a.start, end: a.end });
+        } else {
+          if (!staffBusy.has(a.staffId)) staffBusy.set(a.staffId, []);
+          staffBusy.get(a.staffId).push({ start: a.start, end: a.end });
+        }
+        staffWorkMinutes.set(a.staffId, (staffWorkMinutes.get(a.staffId) || 0) + (a.end - a.start));
+      }
+      if (oldEntry.machineId) {
+        if (!machineBusy.has(oldEntry.machineId)) machineBusy.set(oldEntry.machineId, []);
+        machineBusy.get(oldEntry.machineId).push({ start: oldEntry.start, end: oldEntry.end });
+        machineUsedMinutes.set(oldEntry.machineId, (machineUsedMinutes.get(oldEntry.machineId) || 0) + (oldEntry.end - oldEntry.start));
+      }
+      if (oldEntry.comboCode && !countedComboPatientIds.has(oldEntry.patientId)) {
+        countedComboPatientIds.add(oldEntry.patientId);
+        comboCount[oldEntry.comboCode] = (comboCount[oldEntry.comboCode] || 0) + 1;
+      }
+    }
+  }
 
   /** Chụp lại toàn bộ trạng thái tài nguyên đang dùng, để có thể HOÀN TÁC về
    * đúng lúc này (dù đã đi xa hơn hay đã lùi lại trước đó) — dùng khi 1 bệnh
@@ -481,8 +554,13 @@ function generateSchedule(config, patients) {
     return { plan: fallbackPlan, usedPrimary: false };
   }
 
-  // ---- Xử lý từng bệnh nhân theo thứ tự STT ----
-  const sortedPatients = patients.slice().sort((a, b) => a.stt - b.stt);
+  // ---- Xử lý từng bệnh nhân: ƯU TIÊN người cần ra viện hôm nay lên đầu
+  // (được xếp vào khung giờ sớm nhất trong ngày để kịp làm hồ sơ ra viện),
+  // rồi mới đến các bệnh nhân ngoại trú còn lại theo đúng thứ tự STT. ----
+  const sortedPatients = patients.slice().sort((a, b) => {
+    const prio = (b.priorityDischarge ? 1 : 0) - (a.priorityDischarge ? 1 : 0);
+    return prio !== 0 ? prio : a.stt - b.stt;
+  });
   const procByCode = Object.fromEntries(Object.values(procedures).map((p) => [p.code, p]));
 
   // Nhãn khung giờ ca hôm nay (VD "07:01-11:30 & 13:31-17:00") để ghi rõ vào
@@ -645,8 +723,11 @@ function generateSchedule(config, patients) {
   // nhân kế tiếp trong buổi đó (xem EXAM_PACING_MINUTES). Chỉ đếm bệnh nhân
   // THỰC SỰ được xếp vào buổi đó (kể cả khi họ thiếu bước), không đếm 2 lần
   // cho lượt "thử" ở buổi không được chọn.
-  const examCounters = new Map(shifts.map((s) => [s, 0]));
+  const examCounters = new Map(shifts.map((s, i) => [s, (initialExamCounters && initialExamCounters[i]) || 0]));
   function examFloorFor(shiftWindow) {
+    // Khi thêm 1 bệnh nhân cụ thể vào lịch có sẵn, người dùng tự chọn giờ
+    // bắt đầu — bỏ qua nhịp khám tự động, chỉ đảm bảo không sớm hơn đầu ca.
+    if (forcedExamFloor != null) return Math.max(shiftWindow.start, forcedExamFloor);
     return shiftWindow.start + EXAM_PACING_MINUTES * examCounters.get(shiftWindow);
   }
 
@@ -730,6 +811,15 @@ function generateSchedule(config, patients) {
   // ---- Tổng hợp số liệu ----
   const totalPatients = patients.length;
   const completedPatients = totalPatients - warnings.length;
+
+  // Giá trị CUỐI của bộ đếm nhịp khám mỗi buổi — bên gọi dùng để "nối tiếp"
+  // đúng nhịp khám khi cần chạy thêm 1 lượt mô phỏng tiếp theo (VD lượt thử
+  // "còn nhận thêm được bao nhiêu người thật sự" bằng cách thử xếp thêm vài
+  // bệnh nhân giả định, xem có xong không — chính xác hơn nhiều so với ước
+  // lượng theo công thức, vì tôn trọng ĐẦY ĐỦ mọi ràng buộc thật (máy, nhân
+  // sự...), không chỉ riêng nhịp khám).
+  const examCountersByShift = shifts.map((s) => examCounters.get(s));
+
   const machineUtilization = machines.map((m) => {
     const capacityMinutes = shifts.reduce((sum, s) => sum + (s.end - s.start), 0);
     const used = machineUsedMinutes.get(m.id) || 0;
@@ -812,10 +902,46 @@ function generateSchedule(config, patients) {
       incompletePatients: warnings.length,
       comboCount,
       procedureCount,
+      // [{ start, end, reservedSlots, reservedWindowStart, examCounter }] —
+      // song song với rawShifts. `reservedWindowStart` là mốc bắt đầu khung
+      // giờ đã chủ động để dành cho bệnh nhân thêm sau (nếu có dành chỗ).
+      // `examCounter` (giá trị bộ đếm nhịp khám cuối buổi) để bên gọi TIẾP
+      // TỤC mô phỏng chính xác khi cần tính "còn nhận thêm được bao nhiêu
+      // người" (xem examCountersByShift/initialExamCounters).
+      shiftCapacity: rawShifts.map((s, i) => ({
+        start: s.start,
+        end: s.end,
+        reservedSlots: reservedByShift[i] || 0,
+        reservedWindowStart: shifts[i].end,
+        examCounter: examCountersByShift[i],
+      })),
       machineUtilization,
       staffWorkload,
     },
   };
 }
 
-module.exports = { generateSchedule, findEarliestSlot, findEarliestCapacitySlot, capacityFits, minutesToHHMM };
+/** Ước lượng CHÍNH XÁC còn nhận thêm được bao nhiêu bệnh nhân trong 1 buổi,
+ * bằng cách thực sự mô phỏng thử xếp thêm `batchSize` bệnh nhân giả định
+ * (combo tự động) vào ĐÚNG trạng thái hiện có (existingScheduleEntries,
+ * nối tiếp đúng nhịp khám qua examCounter) — tôn trọng ĐẦY ĐỦ mọi ràng buộc
+ * thật (máy, nhân sự, giờ ca...), không phải ước lượng theo công thức. Nếu
+ * `fit === batchSize`, có thể còn nhiều hơn nữa (chỉ thử tới batchSize) —
+ * xem `atLeast`. KHÔNG ghi gì vào lịch thật, chỉ dùng để trả lời câu hỏi
+ * "còn nhận thêm được bao nhiêu người hôm nay". */
+function estimateRemainingCapacity(config, existingScheduleEntries, shiftIndex, examCounter, batchSize = 30) {
+  const probeConfig = {
+    ...config,
+    shifts: [config.shifts[shiftIndex]],
+    existingScheduleEntries,
+    initialExamCounters: [examCounter],
+    reservedSlotsByShift: undefined,
+  };
+  const probePatients = [];
+  for (let k = 0; k < batchSize; k++) probePatients.push({ id: `__probe_${shiftIndex}_${k}`, stt: 9000000 + k, name: 'Probe' });
+  const probeResult = generateSchedule(probeConfig, probePatients);
+  const fit = probeResult.summary.completedPatients;
+  return { fit, atLeast: fit >= batchSize };
+}
+
+module.exports = { generateSchedule, findEarliestSlot, findEarliestCapacitySlot, capacityFits, minutesToHHMM, estimateRemainingCapacity };
