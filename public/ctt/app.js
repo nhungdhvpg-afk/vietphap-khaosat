@@ -11,6 +11,12 @@ let currentConfig = null; // { staff, machines, procedures, combos, settings, fi
 let lastResult = null;    // kết quả chia thủ thuật gần nhất (để xuất Excel/in)
 let me = null;            // { role, ctt_manager, canManage } — quyền của tài khoản đang đăng nhập
 
+// Ngày (YYYY-MM-DD) đã có lịch chia sẵn trong CSDL — dùng để quyết định nút
+// "+ Thêm 1 dòng" nên thêm dòng trống bình thường (chưa chia lần nào) hay mở
+// modal "thêm bệnh nhân mới" (đã chia rồi, không được xếp lại người cũ).
+let scheduleExistsForDate = null;
+let lastGenerateResult = null; // kết quả gần nhất của ngày đang chọn ở tab Chia thủ thuật — dùng để gợi ý khung giờ/giờ bắt đầu cho modal thêm bệnh nhân
+
 function $(sel) { return document.querySelector(sel); }
 function $all(sel) { return Array.from(document.querySelectorAll(sel)); }
 function escapeHtml(s) { return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
@@ -50,7 +56,36 @@ async function enterApp() {
   $('#reload-date').value = todayStr();
   ensureAtLeastOneRow();
   await loadConfigAndRenderSettings();
+  await checkScheduleExists($('#input-date').value);
 }
+
+/** Kiểm tra ngày đang chọn ở tab "Chia thủ thuật" đã có lịch trong CSDL chưa
+ * — quyết định hành vi nút "+ Thêm 1 dòng" (thêm dòng trống bình thường hay
+ * mở modal "thêm bệnh nhân mới" để không xếp lại người đã có). */
+async function checkScheduleExists(date) {
+  if (!date) { scheduleExistsForDate = null; lastGenerateResult = null; return; }
+  try {
+    const result = await api('/api/ctt-schedule?date=' + encodeURIComponent(date));
+    if (result.patients && result.patients.length > 0) {
+      scheduleExistsForDate = date;
+      lastGenerateResult = result;
+      // Hiển thị lại đúng số suất đã dành riêng lần chia gần nhất của ngày
+      // này — tránh việc để trống ô nhập rồi vô tình "chia lại" mất đi số
+      // suất đã dành ra trước đó.
+      const sc = result.summary && result.summary.shiftCapacity;
+      if (sc && sc[0]) $('#input-reserved-morning').value = sc[0].reservedSlots || 0;
+      if (sc && sc[1]) $('#input-reserved-afternoon').value = sc[1].reservedSlots || 0;
+    } else {
+      scheduleExistsForDate = null;
+      lastGenerateResult = null;
+    }
+  } catch (e) {
+    scheduleExistsForDate = null;
+    lastGenerateResult = null;
+  }
+}
+
+$('#input-date').addEventListener('change', () => { checkScheduleExists($('#input-date').value); });
 
 async function checkSession() {
   if (!supa) { showError('#login-error', 'Chưa cấu hình Supabase (public/config.js).'); return; }
@@ -118,12 +153,13 @@ function comboSelectHtml(selected) {
   return options.map(([v, label]) => `<option value="${v}" ${v === selected ? 'selected' : ''}>${label}</option>`).join('');
 }
 
-function addPatientRow(stt = '', name = '', combo = '') {
+function addPatientRow(stt = '', name = '', combo = '', priorityDischarge = false) {
   const tr = document.createElement('tr');
   tr.innerHTML = `
     <td><input type="number" min="1" class="p-stt" value="${escapeHtml(stt)}"></td>
     <td><input type="text" class="p-name" value="${escapeHtml(name)}" placeholder="Họ và tên"></td>
     <td><select class="p-combo">${comboSelectHtml(combo)}</select></td>
+    <td style="text-align:center;"><input type="checkbox" class="p-priority" ${priorityDischarge ? 'checked' : ''} title="Ưu tiên xếp vào khung giờ sớm nhất trong ngày để làm hồ sơ ra viện"></td>
     <td><span class="del-row" title="Xoá dòng">✕</span></td>
   `;
   tr.querySelector('.del-row').addEventListener('click', () => tr.remove());
@@ -134,7 +170,17 @@ function ensureAtLeastOneRow() {
   if ($('#patients-tbody').children.length === 0) addPatientRow();
 }
 
-$('#btn-add-row').addEventListener('click', () => addPatientRow());
+$('#btn-add-row').addEventListener('click', () => {
+  // Nếu ngày đang chọn ĐÃ có lịch chia sẵn -> không được xếp lại người cũ,
+  // chỉ mở modal xếp thêm cho đúng 1 người mới (theo yêu cầu CEO). Nếu chưa
+  // chia lần nào (đang nhập danh sách ban đầu) -> vẫn thêm dòng trống như cũ.
+  const date = $('#input-date').value;
+  if (scheduleExistsForDate && scheduleExistsForDate === date) {
+    openAddPatientModal();
+  } else {
+    addPatientRow();
+  }
+});
 $('#btn-clear-rows').addEventListener('click', () => { $('#patients-tbody').innerHTML = ''; ensureAtLeastOneRow(); });
 
 $('#btn-paste-apply').addEventListener('click', () => {
@@ -163,6 +209,7 @@ function collectPatients() {
     stt: Number(tr.querySelector('.p-stt').value),
     name: tr.querySelector('.p-name').value.trim(),
     comboOverride: tr.querySelector('.p-combo').value || null,
+    priorityDischarge: tr.querySelector('.p-priority').checked,
   })).filter((p) => p.name && p.stt);
 }
 
@@ -172,12 +219,18 @@ $('#btn-generate').addEventListener('click', async () => {
   const patients = collectPatients();
   if (!date) { showError('#generate-error', 'Chọn ngày.'); return; }
   if (patients.length === 0) { showError('#generate-error', 'Nhập ít nhất 1 bệnh nhân hợp lệ (có STT và Họ tên).'); return; }
+  const reservedSlots = {
+    morning: Math.max(0, Math.floor(Number($('#input-reserved-morning').value) || 0)),
+    afternoon: Math.max(0, Math.floor(Number($('#input-reserved-afternoon').value) || 0)),
+  };
   const btn = $('#btn-generate');
   btn.disabled = true;
   $('#generate-status').textContent = 'Đang chia thủ thuật cho ' + patients.length + ' bệnh nhân...';
   try {
-    const result = await api('/api/ctt-generate', { method: 'POST', body: JSON.stringify({ date, patients }) });
+    const result = await api('/api/ctt-generate', { method: 'POST', body: JSON.stringify({ date, patients, reservedSlots }) });
     lastResult = result;
+    lastGenerateResult = result;
+    scheduleExistsForDate = date;
     renderResults('#results-wrap', result);
     $('#generate-status').textContent = 'Xong lúc ' + new Date().toLocaleTimeString('vi-VN');
   } catch (e) {
@@ -202,6 +255,7 @@ $('#btn-reload').addEventListener('click', async () => {
       return;
     }
     lastResult = result;
+    if ($('#input-date').value === date) { lastGenerateResult = result; scheduleExistsForDate = date; }
     renderResults('#reload-results-wrap', result);
   } catch (e) {
     showError('#reload-error', e.message);
@@ -267,6 +321,12 @@ function renderResults(containerSel, result) {
       html += `<div class="panel"><h3>Số lượt từng thủ thuật</h3><div class="kpi-grid">
         ${summary.procedureCount.map((p) => `<div class="kpi"><div class="v">${p.count}</div><div class="l">${escapeHtml(p.name)}</div></div>`).join('')}
       </div></div>`;
+    }
+
+    if (summary.shiftCapacity) {
+      html += `<div class="panel"><h3>Sức chứa còn lại trong ngày (ước tính thực tế theo nhân sự/máy hiện có)</h3><table><thead><tr><th>Buổi</th><th>Khung giờ</th><th>Số suất đã dành riêng</th><th>Còn nhận thêm được (ước tính)</th></tr></thead><tbody>
+        ${summary.shiftCapacity.map((sc, i) => `<tr><td>${i === 0 ? 'Sáng' : 'Chiều'}</td><td>${sc.startLabel}-${sc.endLabel}</td><td>${sc.reservedSlots || 0}</td><td><b>${sc.remainingFit}${sc.remainingAtLeast ? '+' : ''}</b> bệnh nhân</td></tr>`).join('')}
+      </tbody></table></div>`;
     }
 
     html += `<div class="panel"><h3>Hiệu suất máy</h3><table><thead><tr><th>Máy</th><th>Loại</th><th>Phút đã dùng</th><th>Hiệu suất</th></tr></thead><tbody>
@@ -689,6 +749,91 @@ $('#btn-add-account').addEventListener('click', async () => {
     await loadAccounts();
   } catch (e) {
     showError('#account-error', e.message);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// ---------------------------------------------------------------------------
+// MODAL: THÊM 1 BỆNH NHÂN MỚI VÀO LỊCH ĐÃ CHIA SẴN (không xếp lại người cũ)
+// ---------------------------------------------------------------------------
+function suggestedStartForShift(shiftIndex) {
+  if (!lastGenerateResult) return null;
+  const sc = (lastGenerateResult.summary?.shiftCapacity || [])[shiftIndex];
+  if (!sc) return null;
+  // Gợi ý: bắt đầu ngay sau lượt cuối cùng đang bận trong buổi đó (đảm bảo
+  // vẫn cách quãng chuyển giao), người dùng có thể tự sửa lại giờ này.
+  const entries = (lastGenerateResult.scheduleEntries || []).filter((e) => e.start >= sc.start && e.start < sc.end);
+  const maxEnd = entries.reduce((mx, e) => Math.max(mx, e.end), sc.start);
+  return Math.min(maxEnd + 1, sc.end - 1);
+}
+
+function fillAddModalShiftInfo() {
+  const shiftIndex = $('#add-shift').value === 'morning' ? 0 : 1;
+  const sc = (lastGenerateResult?.summary?.shiftCapacity || [])[shiftIndex];
+  $('#add-shift-window').textContent = sc
+    ? `Khung giờ của buổi: ${sc.startLabel}-${sc.endLabel} · đã dành riêng ${sc.reservedSlots || 0} suất · ước tính còn nhận thêm được ${sc.remainingFit}${sc.remainingAtLeast ? '+' : ''} người.`
+    : '';
+  const suggested = suggestedStartForShift(shiftIndex);
+  $('#add-start').value = suggested != null ? hhmm(suggested) : '';
+}
+
+function openAddPatientModal() {
+  if (!lastGenerateResult) {
+    alert('Chưa có lịch nào được chia cho ngày này — bấm "⚙ Chia thủ thuật" trước, sau đó mới dùng nút này để thêm bệnh nhân mới nhập viện.');
+    return;
+  }
+  $('#modal-add-error').style.display = 'none';
+  $('#modal-add-warning').style.display = 'none';
+  $('#add-shift').value = 'morning';
+  $('#add-stt').value = '';
+  $('#add-name').value = '';
+  $('#add-combo').innerHTML = comboSelectHtml('');
+  fillAddModalShiftInfo();
+  $('#add-patient-modal').style.display = 'flex';
+}
+
+$('#add-shift').addEventListener('change', fillAddModalShiftInfo);
+$('#btn-modal-cancel').addEventListener('click', () => { $('#add-patient-modal').style.display = 'none'; });
+
+$('#btn-modal-submit').addEventListener('click', async () => {
+  const errEl = $('#modal-add-error');
+  const warnEl = $('#modal-add-warning');
+  errEl.style.display = 'none';
+  warnEl.style.display = 'none';
+  const date = $('#input-date').value;
+  const stt = $('#add-stt').value;
+  const name = $('#add-name').value.trim();
+  const shift = $('#add-shift').value;
+  const desiredStart = $('#add-start').value.trim();
+  const comboOverride = $('#add-combo').value || null;
+  if (!stt || !name || !desiredStart) {
+    errEl.textContent = 'Nhập đủ STT, Họ tên và giờ bắt đầu.';
+    errEl.style.display = 'block';
+    return;
+  }
+  const btn = $('#btn-modal-submit');
+  btn.disabled = true;
+  try {
+    const result = await api('/api/ctt-generate', { method: 'POST', body: JSON.stringify({ action: 'add_patient', date, stt, name, shift, desiredStart, comboOverride }) });
+    if (!result.ok) {
+      warnEl.innerHTML = escapeHtml(result.message || 'Không thêm được — quá tải.') + (result.suggestedMessage ? '<br>' + escapeHtml(result.suggestedMessage) : '');
+      warnEl.style.display = 'block';
+      if (result.suggestedCombo) $('#add-combo').value = result.suggestedCombo;
+      return;
+    }
+    $('#add-patient-modal').style.display = 'none';
+    // Tải lại lịch cả ngày để hiển thị đầy đủ (gồm cả người vừa thêm) —
+    // những người đã có trước đó không bị đụng tới ở phía server, chỉ là
+    // hiển thị lại cho đủ.
+    const refreshed = await api('/api/ctt-schedule?date=' + encodeURIComponent(date));
+    lastResult = refreshed;
+    lastGenerateResult = refreshed;
+    renderResults('#results-wrap', refreshed);
+    alert(`Đã thêm bệnh nhân "${name}" (STT ${stt}) vào lịch — combo ${result.usedCombo || '(tự động)'}.`);
+  } catch (e) {
+    errEl.textContent = e.message;
+    errEl.style.display = 'block';
   } finally {
     btn.disabled = false;
   }
