@@ -169,13 +169,13 @@ values
   ('KH',   'Khám / Chỉ định',    5, false, null,   0, false, null, null, 10, array['BS'],         null, true)
 on conflict (code) do nothing;
 
--- 4 combo tham khảo (nhãn hiển thị — thuật toán tự chọn biến thể tối ưu)
+-- 3 combo chính thức theo hồ sơ gốc (nhãn hiển thị — thuật toán tự chọn biến
+-- thể tối ưu trong phạm vi 3 combo này; KHÔNG có "Hào châm + Xông hơi").
 insert into ctt_combos (code, name, step2_code, step4_code, priority)
 values
-  ('C1',  'Combo 1 (ưu tiên)',        'DC', 'XH', 1),
-  ('C2',  'Combo 2',                  'DC', 'CN', 2),
-  ('C2B', 'Combo 2 – biến thể đông',  'HC', 'CN', 3),
-  ('C3',  'Combo 3',                  'HC', 'XH', 4)
+  ('C1', 'Combo 1 (XBBH + Điện châm + Thủy châm + Xông hơi) — ưu tiên cao nhất', 'DC', 'XH', 1),
+  ('C2', 'Combo 2 (XBBH + Điện châm + Thủy châm + Cứu ngải) — ưu tiên thứ 2',    'DC', 'CN', 2),
+  ('C3', 'Combo 3 (XBBH + Hào châm + Thủy châm + Cứu ngải) — ưu tiên thứ 3',     'HC', 'CN', 3)
 on conflict (code) do nothing;
 
 -- Máy móc: 2 xông + 4 châm
