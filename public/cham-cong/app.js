@@ -12,7 +12,9 @@ const supa = (cfg.SUPABASE_URL && cfg.SUPABASE_ANON_KEY)
 
 let me = null;              // { role, cham_cong_manager, canManage }
 let lastResult = null;      // { events, warnings, month, year } của lần xử lý gần nhất (để xuất Excel)
+let reviewsMap = new Map(); // `${person_key}|${category}` -> { decision, note, reviewed_by, reviewed_at }
 const selectedFiles = { 1: null, 2: null, 3: null };
+const reviewKey = (personKey, category) => `${personKey}|${category}`;
 
 function $(sel) { return document.querySelector(sel); }
 function $all(sel) { return Array.from(document.querySelectorAll(sel)); }
@@ -67,6 +69,7 @@ async function enterApp() {
   $('#view-main').style.display = 'block';
   $('#btn-logout').style.display = 'inline-flex';
   applyPermissions();
+  await loadReviews();
   if (me.role === 'ceo') loadAccounts();
 }
 
@@ -351,6 +354,55 @@ function detectMonthYear(events) {
 }
 
 // ---------------------------------------------------------------------------
+// XEM XÉT CẢNH BÁO (xác nhận lỗi / bỏ qua có lý do) — lưu theo cặp
+// (người, loại cảnh báo) nên áp dụng lại được cho các tháng sau, xem
+// api/cham-cong-reviews.js và supabase/schema_cham_cong_warning_reviews.sql.
+// ---------------------------------------------------------------------------
+async function loadReviews() {
+  try {
+    const { reviews } = await api('/api/cham-cong-reviews');
+    reviewsMap = new Map(reviews.map((r) => [reviewKey(r.person_key, r.category), r]));
+    renderReviewsAdminPanel(reviews);
+  } catch (e) {
+    console.error('loadReviews failed', e);
+  }
+}
+
+async function setReviewDecision(personKey, personDisplay, category, decision, note) {
+  await api('/api/cham-cong-reviews', { method: 'POST', body: JSON.stringify({ action: 'set', payload: { person_key: personKey, person_display: personDisplay, category, decision, note } }) });
+  await loadReviews();
+  if (lastResult) renderResults(lastResult);
+}
+
+async function deleteReviewDecision(personKey, category) {
+  await api('/api/cham-cong-reviews', { method: 'POST', body: JSON.stringify({ action: 'delete', payload: { person_key: personKey, category } }) });
+  await loadReviews();
+  if (lastResult) renderResults(lastResult);
+}
+
+function renderReviewsAdminPanel(reviews) {
+  const panel = $('#panel-reviews-list');
+  if (!panel) return;
+  if (!reviews.length) {
+    panel.innerHTML = '<p class="muted">Chưa có cảnh báo nào được xem xét.</p>';
+    return;
+  }
+  let html = '<table><thead><tr><th>Họ tên</th><th>Loại cảnh báo</th><th style="width:100px;">Quyết định</th><th>Lý do</th><th style="width:150px;">Người xem xét</th><th style="width:70px;"></th></tr></thead><tbody>';
+  for (const r of reviews) {
+    const pill = r.decision === 'dismissed' ? '<span class="pill pill-tb">Bỏ qua</span>' : '<span class="pill pill-cao">Xác nhận lỗi</span>';
+    html += `<tr><td>${escapeHtml(r.person_display)}</td><td>${escapeHtml(r.category)}</td><td>${pill}</td><td>${escapeHtml(r.note || '')}</td><td class="muted">${escapeHtml(r.reviewed_by)}<br>${new Date(r.reviewed_at).toLocaleDateString('vi-VN')}</td><td><span class="del-row" data-person="${encodeURIComponent(r.person_key)}" data-category="${encodeURIComponent(r.category)}" title="Huỷ quyết định — quay lại trạng thái chưa xem xét">✕</span></td></tr>`;
+  }
+  html += '</tbody></table>';
+  panel.innerHTML = html;
+  panel.querySelectorAll('.del-row').forEach((el) => {
+    el.addEventListener('click', async () => {
+      if (!confirm('Huỷ quyết định đã xem xét? Cảnh báo này sẽ được đánh giá lại từ đầu (kể cả các tháng sau).')) return;
+      await deleteReviewDecision(decodeURIComponent(el.dataset.person), decodeURIComponent(el.dataset.category));
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
 // XỬ LÝ FILE
 // ---------------------------------------------------------------------------
 [1, 2, 3].forEach((n) => {
@@ -403,9 +455,17 @@ function renderResults(result) {
   const persons = [...new Set(events.map((e) => e.person))].sort((a, b) => reg.displayName(a).localeCompare(reg.displayName(b), 'vi'));
   const byPersonDay = groupByPersonDay(events);
 
+  // Áp quyết định đã xem xét (theo cặp người + loại cảnh báo): "dismissed" thì
+  // không tính là cảnh báo đang hoạt động nữa (nhưng vẫn giữ trong file Excel
+  // xuất ra để có dấu vết); "error" thì vẫn cảnh báo bình thường, chỉ thêm nhãn
+  // đã xác nhận.
+  for (const w of warnings) w.review = reviewsMap.get(reviewKey(w.person, w.cat)) || null;
+  const activeWarnings = warnings.filter((w) => !(w.review && w.review.decision === 'dismissed'));
+  const dismissedWarnings = warnings.filter((w) => w.review && w.review.decision === 'dismissed');
+
   const warnCaoCells = new Set();
   let nCao = 0, nTb = 0;
-  for (const w of warnings) {
+  for (const w of activeWarnings) {
     if (w.sev === 'CAO') { warnCaoCells.add(`${w.person}|${w.dateKey}`); nCao++; } else nTb++;
   }
   const distinctDays = new Set(events.map((e) => e.dateKey)).size;
@@ -416,8 +476,9 @@ function renderResults(result) {
     <div class="kpi"><div class="v">${persons.length}</div><div class="l">Y sĩ/Bác sĩ có hoạt động</div></div>
     <div class="kpi"><div class="v">${pad2(month)}/${year}</div><div class="l">Kỳ chấm công phát hiện</div></div>
     <div class="kpi"><div class="v">${distinctDays}</div><div class="l">Ngày có dữ liệu</div></div>
-    <div class="kpi"><div class="v warn">${nCao}</div><div class="l">Cảnh báo mức CAO</div></div>
-    <div class="kpi"><div class="v">${nTb}</div><div class="l">Cảnh báo mức trung bình</div></div>
+    <div class="kpi"><div class="v warn">${nCao}</div><div class="l">Đang hoạt động - mức CAO</div></div>
+    <div class="kpi"><div class="v">${nTb}</div><div class="l">Đang hoạt động - mức TB</div></div>
+    <div class="kpi"><div class="v">${dismissedWarnings.length}</div><div class="l">Đã xem xét &amp; bỏ qua</div></div>
   </div>`;
 
   html += `<div class="toolbar">
@@ -457,24 +518,72 @@ function renderResults(result) {
   }
   html += `</tbody></table></div></div>`;
 
-  // ---- Cảnh báo ----
+  // ---- Cảnh báo đang hoạt động ----
   const sevOrder = { CAO: 0, 'TRUNG BÌNH': 1 };
-  const warningsSorted = warnings.slice().sort((a, b) => (sevOrder[a.sev] - sevOrder[b.sev]) || a.dateKey.localeCompare(b.dateKey) || reg.displayName(a.person).localeCompare(reg.displayName(b.person), 'vi'));
-  html += `<div class="panel"><h3>Cảnh báo nghi vấn (${warnings.length})</h3>`;
-  if (warningsSorted.length === 0) {
-    html += `<p class="muted">Không phát hiện dấu hiệu bất thường nào với dữ liệu tháng này.</p>`;
+  const sortWarnings = (list) => list.slice().sort((a, b) => (sevOrder[a.sev] - sevOrder[b.sev]) || a.dateKey.localeCompare(b.dateKey) || reg.displayName(a.person).localeCompare(reg.displayName(b.person), 'vi'));
+  const activeSorted = sortWarnings(activeWarnings);
+  html += `<div class="panel"><h3>Cảnh báo đang hoạt động (${activeWarnings.length})</h3>
+    <p class="muted" style="margin-top:0;">Kiểm tra xong 1 dòng: bấm <b>"✓ Xác nhận lỗi"</b> nếu đúng là bất thường (vẫn tiếp tục cảnh báo các tháng sau) hoặc <b>"✕ Bỏ qua"</b> kèm lý do nếu đây là tình huống bình thường (từ tháng sau sẽ không cảnh báo lại cho đúng người + đúng loại cảnh báo này nữa).</p>`;
+  if (activeSorted.length === 0) {
+    html += `<p class="muted">Không có cảnh báo nào đang hoạt động.</p>`;
   } else {
-    html += `<table><thead><tr><th style="width:90px;">Mức độ</th><th style="width:200px;">Loại cảnh báo</th><th style="width:150px;">Họ tên</th><th style="width:90px;">Ngày</th><th>Chi tiết</th></tr></thead><tbody>`;
-    for (const w of warningsSorted) {
+    html += `<table><thead><tr><th style="width:90px;">Mức độ</th><th style="width:190px;">Loại cảnh báo</th><th style="width:140px;">Họ tên</th><th style="width:85px;">Ngày</th><th>Chi tiết</th><th style="width:230px;">Xem xét</th></tr></thead><tbody>`;
+    activeSorted.forEach((w, idx) => {
       const pillClass = w.sev === 'CAO' ? 'pill-cao' : 'pill-tb';
-      html += `<tr><td><span class="pill ${pillClass}">${w.sev}</span></td><td>${escapeHtml(w.cat)}</td><td>${escapeHtml(reg.displayName(w.person))}</td><td>${ddmmyyyy(w.dateKey)}</td><td>${escapeHtml(w.detail)}</td></tr>`;
-    }
+      let reviewCell;
+      if (w.review && w.review.decision === 'error') {
+        reviewCell = `<span class="pill pill-cao">✓ Đã xác nhận lỗi</span><br><span class="muted">${escapeHtml(w.review.reviewed_by)}</span> <span class="del-row" data-act="undo" data-idx="${idx}" title="Huỷ xác nhận">✕</span>`;
+      } else {
+        reviewCell = `<button class="btn btn-sm" data-act="confirm" data-idx="${idx}">✓ Xác nhận lỗi</button> <button class="btn btn-sm" data-act="dismiss" data-idx="${idx}">✕ Bỏ qua</button>`;
+      }
+      html += `<tr><td><span class="pill ${pillClass}">${w.sev}</span></td><td>${escapeHtml(w.cat)}</td><td>${escapeHtml(reg.displayName(w.person))}</td><td>${ddmmyyyy(w.dateKey)}</td><td>${escapeHtml(w.detail)}</td><td>${reviewCell}</td></tr>`;
+    });
     html += `</tbody></table>`;
   }
   html += `</div>`;
 
+  // ---- Đã xem xét & bỏ qua ----
+  if (dismissedWarnings.length) {
+    const dismissedSorted = sortWarnings(dismissedWarnings);
+    html += `<div class="panel"><h3>Đã xem xét &amp; bỏ qua (${dismissedWarnings.length})</h3>
+      <p class="muted" style="margin-top:0;">Các cảnh báo này đã được người phụ trách kiểm tra và xác nhận là bình thường — không tính vào số liệu ở trên. Bấm "↺" nếu muốn đánh giá lại.</p>
+      <table><thead><tr><th style="width:190px;">Loại cảnh báo</th><th style="width:140px;">Họ tên</th><th style="width:85px;">Ngày</th><th>Chi tiết</th><th>Lý do bỏ qua</th><th style="width:60px;"></th></tr></thead><tbody>`;
+    dismissedSorted.forEach((w, idx) => {
+      html += `<tr><td>${escapeHtml(w.cat)}</td><td>${escapeHtml(reg.displayName(w.person))}</td><td>${ddmmyyyy(w.dateKey)}</td><td>${escapeHtml(w.detail)}</td><td>${escapeHtml(w.review.note || '')}<br><span class="muted">${escapeHtml(w.review.reviewed_by)}</span></td><td><span class="del-row" data-act="undo-dismiss" data-idx="${idx}" title="Đánh giá lại">↺</span></td></tr>`;
+    });
+    html += `</tbody></table></div>`;
+  }
+
   $('#results-wrap').innerHTML = html;
   $('#btn-export-excel').addEventListener('click', () => exportExcel(result));
+
+  $('#results-wrap').querySelectorAll('[data-act="confirm"]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const w = activeSorted[Number(btn.dataset.idx)];
+      await setReviewDecision(w.person, reg.displayName(w.person), w.cat, 'error', null);
+    });
+  });
+  $('#results-wrap').querySelectorAll('[data-act="dismiss"]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const w = activeSorted[Number(btn.dataset.idx)];
+      const note = prompt(`Lý do bỏ qua cảnh báo "${w.cat}" cho ${reg.displayName(w.person)}?\n(Bắt buộc nhập — từ tháng sau sẽ không cảnh báo lại loại này cho người này nữa)`);
+      if (note === null) return;
+      if (!note.trim()) { alert('Cần nhập lý do để bỏ qua cảnh báo.'); return; }
+      await setReviewDecision(w.person, reg.displayName(w.person), w.cat, 'dismissed', note);
+    });
+  });
+  $('#results-wrap').querySelectorAll('[data-act="undo"]').forEach((el) => {
+    el.addEventListener('click', async () => {
+      const w = activeSorted[Number(el.dataset.idx)];
+      await deleteReviewDecision(w.person, w.cat);
+    });
+  });
+  $('#results-wrap').querySelectorAll('[data-act="undo-dismiss"]').forEach((el) => {
+    el.addEventListener('click', async () => {
+      const w = sortWarnings(dismissedWarnings)[Number(el.dataset.idx)];
+      await deleteReviewDecision(w.person, w.cat);
+    });
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -486,7 +595,8 @@ function exportExcel(result) {
   const daysInMonth = new Date(year, month, 0).getDate();
   const persons = [...new Set(events.map((e) => e.person))].sort((a, b) => reg.displayName(a).localeCompare(reg.displayName(b), 'vi'));
   const byPersonDay = groupByPersonDay(events);
-  const warnCaoCells = new Set(warnings.filter((w) => w.sev === 'CAO').map((w) => `${w.person}|${w.dateKey}`));
+  for (const w of warnings) w.review = reviewsMap.get(reviewKey(w.person, w.cat)) || null;
+  const warnCaoCells = new Set(warnings.filter((w) => w.sev === 'CAO' && !(w.review && w.review.decision === 'dismissed')).map((w) => `${w.person}|${w.dateKey}`));
 
   // Sheet 1
   const s1 = [];
@@ -523,8 +633,9 @@ function exportExcel(result) {
     s2.push([reg.displayName(e.person), ddmmyyyy(e.dateKey), e.start ? hhmm(e.start) : '', e.end ? hhmm(e.end) : '', e.role, e.source, e.patient ? String(e.patient) : '', e.dept || '', e.detail || '']);
   }
 
-  // Sheet 3
-  const s3 = [['Mức độ', 'Loại cảnh báo', 'Họ tên', 'Ngày', 'Chi tiết', 'Khuyến nghị xử lý']];
+  // Sheet 3 — bao gồm CẢ cảnh báo đã bỏ qua (có ghi rõ trạng thái + lý do) để
+  // giữ đầy đủ dấu vết audit, không âm thầm biến mất khỏi hồ sơ xuất ra.
+  const s3 = [['Mức độ', 'Loại cảnh báo', 'Họ tên', 'Ngày', 'Chi tiết', 'Trạng thái xem xét', 'Lý do / người xem xét', 'Khuyến nghị xử lý']];
   const RECOMMEND = {
     'Trùng giờ thủ thuật/dịch vụ (giám sát quá nhiều BN)': 'Kiểm tra số giường/chỗ thực tế có đủ để giám sát đồng thời số BN này không. Nếu vượt khả năng giám sát thực tế, cần bổ sung nhân sự hoặc điều chỉnh lịch, tránh bị giám định BHYT nghi ngờ kê khống dịch vụ.',
     'Trùng giờ giữa y lệnh/CLS và thủ thuật': 'Kiểm tra lại người thực hiện thực tế (có thể do nhân viên khác ký thay/nhập hộ). Đính chính dữ liệu trước khi quyết toán BHYT.',
@@ -534,12 +645,16 @@ function exportExcel(result) {
   const sevOrder = { CAO: 0, 'TRUNG BÌNH': 1 };
   const warningsSorted = warnings.slice().sort((a, b) => (sevOrder[a.sev] - sevOrder[b.sev]) || a.dateKey.localeCompare(b.dateKey) || reg.displayName(a.person).localeCompare(reg.displayName(b.person), 'vi'));
   for (const w of warningsSorted) {
-    s3.push([w.sev, w.cat, reg.displayName(w.person), ddmmyyyy(w.dateKey), w.detail, RECOMMEND[w.cat] || 'Rà soát lại hồ sơ liên quan.']);
+    const trangThai = w.review ? (w.review.decision === 'dismissed' ? 'Đã bỏ qua' : 'Đã xác nhận lỗi') : 'Chưa xem xét';
+    const lyDo = w.review ? `${w.review.note ? w.review.note + ' — ' : ''}${w.review.reviewed_by}` : '';
+    s3.push([w.sev, w.cat, reg.displayName(w.person), ddmmyyyy(w.dateKey), w.detail, trangThai, lyDo, RECOMMEND[w.cat] || 'Rà soát lại hồ sơ liên quan.']);
   }
-  const nCao = warnings.filter((w) => w.sev === 'CAO').length;
-  const nTb = warnings.filter((w) => w.sev === 'TRUNG BÌNH').length;
+  const activeForCount = warnings.filter((w) => !(w.review && w.review.decision === 'dismissed'));
+  const nCao = activeForCount.filter((w) => w.sev === 'CAO').length;
+  const nTb = activeForCount.filter((w) => w.sev === 'TRUNG BÌNH').length;
+  const nDismissed = warnings.length - activeForCount.length;
   s3.push([]);
-  s3.push([`Tổng số cảnh báo: ${warnings.length}  (Cao: ${nCao} | Trung bình: ${nTb})`]);
+  s3.push([`Đang hoạt động: ${activeForCount.length} (Cao: ${nCao} | Trung bình: ${nTb})  ·  Đã xem xét & bỏ qua: ${nDismissed}  ·  Tổng phát hiện: ${warnings.length}`]);
 
   // Sheet 4
   const s4lines = [
