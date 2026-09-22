@@ -770,11 +770,67 @@ function generateSchedule(config, patients) {
   // THỰC SỰ được xếp vào buổi đó (kể cả khi họ thiếu bước), không đếm 2 lần
   // cho lượt "thử" ở buổi không được chọn.
   const examCounters = new Map(rawShifts.map((s, i) => [s.start, (initialExamCounters && initialExamCounters[i]) || 0]));
-  function examFloorFor(shiftWindow) {
+
+  // Bệnh nhân "giữ chỗ" BNM cần xếp vào các khung giờ MUỘN NHẤT có thể của
+  // đúng buổi bị khoá (để đúng như hình dung "để dành chỗ cuối buổi" của
+  // CEO), CHỨ KHÔNG xếp ngay từ đầu buổi như bệnh nhân bình thường — nhưng
+  // vẫn phải được xử lý TRƯỚC bệnh nhân ngoại trú (xem `tierOf` ở trên) để
+  // đảm bảo suất để dành không bị "ăn" mất. Vì vậy dùng bộ đếm/mốc RIÊNG
+  // (không dùng chung examCounters với người ra viện hôm nay/ngoại trú):
+  // mốc neo = giờ kết thúc buổi TRỪ ĐI thời lượng tối đa ước tính của 1 phác
+  // đồ đầy đủ (đủ chỗ cho MỌI người giữ chỗ của buổi đó xếp nối tiếp nhau
+  // theo đúng nhịp khám, vẫn kết thúc gọn trong buổi).
+  function estimateMaxComboDuration() {
+    // Phải cộng cả "nghỉ sau" (VD Xông hơi nghỉ 15') — đây là thời gian
+    // THUỘC VỀ bệnh nhân (patientState.cursor vẫn trôi qua khoảng này dù máy
+    // đã rảnh cho người khác), bỏ sót sẽ làm mốc neo tính MUỘN QUÁ so với
+    // thực tế, khiến bước cuối luôn bị đẩy vượt quá giờ kết thúc ca.
+    const totalOf = (code) => {
+      const p = procByCode[code];
+      return p ? (p.duration_minutes || 0) + (p.rest_after_minutes || 0) : 0;
+    };
+    const xbbh = totalOf('XBBH');
+    const step2 = Math.max(totalOf('DC'), totalOf('HC'));
+    const step3 = totalOf('TC');
+    const step4 = Math.max(totalOf('XH'), totalOf('CN'));
+    // Thêm chút dư an toàn (không phải lúc nào thứ tự linh hoạt cũng ghép
+    // khít 100% liên tiếp — VD phải chờ đúng máy/người theo dõi rảnh) để
+    // tránh cứ phải lùi về mốc sớm (fallback) một cách không cần thiết.
+    return xbbh + step2 + step3 + step4 + 3 * transferBufferMinutes + 15;
+  }
+  const maxComboDuration = estimateMaxComboDuration();
+  const placeholderCountByShiftStart = new Map();
+  for (const p of patients) {
+    if (!p.isPlaceholder) continue;
+    const idx = p.placeholderShift === 'morning' ? 0 : (p.placeholderShift === 'afternoon' ? 1 : null);
+    if (idx == null || !shifts[idx]) continue;
+    const key = shifts[idx].start;
+    placeholderCountByShiftStart.set(key, (placeholderCountByShiftStart.get(key) || 0) + 1);
+  }
+  const placeholderAnchorByShiftStart = new Map();
+  for (const [shiftStart, count] of placeholderCountByShiftStart) {
+    const shiftEnd = shifts.find((s) => s.start === shiftStart).end;
+    const anchor = Math.max(shiftStart, shiftEnd - maxComboDuration - EXAM_PACING_MINUTES * (count - 1));
+    placeholderAnchorByShiftStart.set(shiftStart, anchor);
+  }
+  const placeholderCounters = new Map();
+
+  function examFloorFor(patient, shiftWindow) {
     // Khi thêm 1 bệnh nhân cụ thể vào lịch có sẵn, người dùng tự chọn giờ
     // bắt đầu — bỏ qua nhịp khám tự động, chỉ đảm bảo không sớm hơn đầu ca.
     if (forcedExamFloor != null) return Math.max(shiftWindow.start, forcedExamFloor);
+    if (patient.isPlaceholder) {
+      const anchor = placeholderAnchorByShiftStart.get(shiftWindow.start) ?? shiftWindow.start;
+      return anchor + EXAM_PACING_MINUTES * (placeholderCounters.get(shiftWindow.start) || 0);
+    }
     return shiftWindow.start + EXAM_PACING_MINUTES * examCounters.get(shiftWindow.start);
+  }
+  function bumpCounterFor(patient, shiftWindow) {
+    if (patient.isPlaceholder) {
+      placeholderCounters.set(shiftWindow.start, (placeholderCounters.get(shiftWindow.start) || 0) + 1);
+    } else {
+      examCounters.set(shiftWindow.start, examCounters.get(shiftWindow.start) + 1);
+    }
   }
 
   for (const patient of sortedPatients) {
@@ -788,11 +844,24 @@ function generateSchedule(config, patients) {
       let usedShift = null;
       for (const shiftWindow of candidateShifts) {
         const snap = snapshotState();
-        outcome = attemptPatientInShift(patient, shiftWindow, examFloorFor(shiftWindow));
+        outcome = attemptPatientInShift(patient, shiftWindow, examFloorFor(patient, shiftWindow));
         if (outcome.ok) { usedShift = shiftWindow; break; }
         restoreState(snap);
+        // Bệnh nhân giữ chỗ BNM: nếu mốc "muộn nhất" ước tính vẫn không đủ
+        // chỗ (VD máy/nhân sự bận hơn dự tính, hoặc nhiều người giữ chỗ dồn
+        // vào cuối buổi tranh nhau tài nguyên) -> BẮT BUỘC vẫn phải giữ được
+        // suất này (đây là yêu cầu cứng, không được phép thất bại), nên thử
+        // lại từ mốc SỚM NHẤT (đã kiểm chứng luôn xếp được, vì được ưu tiên
+        // trước bệnh nhân ngoại trú) — thà xếp sớm còn hơn mất hẳn suất.
+        if (patient.isPlaceholder) {
+          const snap2 = snapshotState();
+          const earlyFloor = shiftWindow.start + EXAM_PACING_MINUTES * (placeholderCounters.get(shiftWindow.start) || 0);
+          const fallbackOutcome = attemptPatientInShift(patient, shiftWindow, earlyFloor);
+          if (fallbackOutcome.ok) { outcome = fallbackOutcome; usedShift = shiftWindow; break; }
+          restoreState(snap2);
+        }
       }
-      if (usedShift) examCounters.set(usedShift.start, examCounters.get(usedShift.start) + 1);
+      if (usedShift) bumpCounterFor(patient, usedShift);
       finalizePatientOutcome(patient, outcome);
       continue;
     }
@@ -807,7 +876,7 @@ function generateSchedule(config, patients) {
     const attempts = [];
     for (const shiftWindow of candidateShifts) {
       const snap = snapshotState();
-      const outcome = attemptPatientInShift(patient, shiftWindow, examFloorFor(shiftWindow));
+      const outcome = attemptPatientInShift(patient, shiftWindow, examFloorFor(patient, shiftWindow));
       if (outcome.ok) {
         attempts.push({ shiftWindow, outcome, snap: snapshotState() });
       }
@@ -819,7 +888,7 @@ function generateSchedule(config, patients) {
       // cùng (buổi chiều) để có thông tin cụ thể nhất.
       const lastShift = candidateShifts[candidateShifts.length - 1];
       const snap = snapshotState();
-      const lastOutcome = attemptPatientInShift(patient, lastShift, examFloorFor(lastShift));
+      const lastOutcome = attemptPatientInShift(patient, lastShift, examFloorFor(patient, lastShift));
       restoreState(snap);
       finalizePatientOutcome(patient, lastOutcome);
       continue;
@@ -839,7 +908,7 @@ function generateSchedule(config, patients) {
     });
     const chosen = attempts[0];
     restoreState(chosen.snap); // áp lại đúng kết quả đã chọn
-    examCounters.set(chosen.shiftWindow.start, examCounters.get(chosen.shiftWindow.start) + 1);
+    bumpCounterFor(patient, chosen.shiftWindow);
     finalizePatientOutcome(patient, chosen.outcome);
   }
 

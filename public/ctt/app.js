@@ -296,9 +296,29 @@ function comboPillHtml(code) {
   return `<span class="pill ${cls}">${code}</span>`;
 }
 
+/** Sắp xếp bệnh nhân theo GIỜ XẾP SỚM NHẤT trong ngày (không phải theo STT).
+ * Cần thiết vì bệnh nhân "giữ chỗ" BNM được gán STT giả rất lớn (90001,
+ * 95001...) để không trùng STT thật — nếu sắp theo STT, các dòng BNM luôn
+ * hiện ở CUỐI bảng dù giờ giấc thực tế của họ thường sớm nhất trong buổi
+ * (do được ưu tiên xếp trước bệnh nhân ngoại trú), dễ khiến hiểu NHẦM là hệ
+ * thống xếp họ vào giờ muộn nhất. Bệnh nhân chưa xếp được thủ thuật nào
+ * (thiếu bước) luôn xuống cuối bảng — hợp lý vì cần chú ý xử lý riêng. */
+function sortPatientsBySchedule(patients, entries) {
+  const earliestByPatient = new Map();
+  for (const e of entries) {
+    const cur = earliestByPatient.get(e.patientId);
+    if (cur == null || e.start < cur) earliestByPatient.set(e.patientId, e.start);
+  }
+  return patients.slice().sort((a, b) => {
+    const ta = earliestByPatient.has(a.id) ? earliestByPatient.get(a.id) : Infinity;
+    const tb = earliestByPatient.has(b.id) ? earliestByPatient.get(b.id) : Infinity;
+    return ta !== tb ? ta - tb : a.stt - b.stt;
+  });
+}
+
 function renderResults(containerSel, result) {
   const entries = (result.scheduleEntries || []).slice().sort((a, b) => a.start - b.start);
-  const patients = (result.patients || []).slice().sort((a, b) => a.stt - b.stt);
+  const patients = sortPatientsBySchedule(result.patients || [], entries);
   const summary = result.summary;
 
   let html = '';
@@ -448,7 +468,7 @@ function renderResults(containerSel, result) {
 // ---------------------------------------------------------------------------
 function exportExcel(result) {
   const entries = (result.scheduleEntries || []).slice().sort((a, b) => a.start - b.start);
-  const patients = (result.patients || []).slice().sort((a, b) => a.stt - b.stt);
+  const patients = sortPatientsBySchedule(result.patients || [], entries);
 
   const warningByPatientId = new Map((result.warnings || []).map((w) => [w.patientId, w]));
   const sheetPatient = [['STT', 'Họ tên', 'Combo', 'Thủ thuật', 'Bắt đầu', 'Kết thúc', 'Máy', 'Nhân viên']];
