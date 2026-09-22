@@ -110,22 +110,21 @@
     <div class="tabview active" id="tab-chamcong">
       <div class="panel no-print">
         <h3>1. Tải lên 3 báo cáo HIS của kỳ cần chấm công</h3>
-        <p class="muted" style="margin-top:0;">Toàn bộ xử lý chạy NGAY TRONG TRÌNH DUYỆT — file và dữ liệu bệnh nhân không được gửi lên server/lưu ở đâu cả.</p>
-        <div class="upload-grid">
-          <div class="file-slot" id="slot-1">
+        <p class="muted" style="margin-top:0;">Chọn 1 lần cả 3 file — hệ thống tự nhận diện đúng file nào là gì (không cần chọn đúng thứ tự). Toàn bộ xử lý chạy NGAY TRONG TRÌNH DUYỆT — file và dữ liệu bệnh nhân không được gửi lên server/lưu ở đâu cả.</p>
+        <label style="margin:0;">Chọn cả 3 file cùng lúc (giữ Ctrl/Cmd khi chọn nhiều file)</label>
+        <input type="file" id="file-multi" accept=".xlsx" multiple>
+        <div class="upload-grid" style="margin-top:14px;">
+          <div class="file-slot" id="slot-chiphi">
             <label style="margin:0;">① Bảng kê chi phí chi tiết</label>
-            <input type="file" id="file-1" accept=".xlsx">
-            <div class="fname" id="fname-1">Chưa chọn file</div>
+            <div class="fname" id="fname-chiphi">Chưa nhận diện được</div>
           </div>
-          <div class="file-slot" id="slot-2">
+          <div class="file-slot" id="slot-cls">
             <label style="margin:0;">② Sổ kết quả CLS theo bác sĩ</label>
-            <input type="file" id="file-2" accept=".xlsx">
-            <div class="fname" id="fname-2">Chưa chọn file</div>
+            <div class="fname" id="fname-cls">Chưa nhận diện được</div>
           </div>
-          <div class="file-slot" id="slot-3">
+          <div class="file-slot" id="slot-thuthuat">
             <label style="margin:0;">③ Sổ thủ thuật trong ngày làm</label>
-            <input type="file" id="file-3" accept=".xlsx">
-            <div class="fname" id="fname-3">Chưa chọn file</div>
+            <div class="fname" id="fname-thuthuat">Chưa nhận diện được</div>
           </div>
         </div>
         <div class="error-box" id="process-error"></div>
