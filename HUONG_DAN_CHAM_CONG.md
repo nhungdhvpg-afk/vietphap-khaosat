@@ -48,8 +48,15 @@ chỉ tồn tại trên máy đang mở trình duyệt, cho đến khi bấm t�
 **Lưu ý quan trọng:** "Giờ hoạt động" là giờ đầu-cuối các sự kiện hệ thống
 HIS ghi nhận trong ngày — KHÔNG PHẢI giờ vào/ra qua máy chấm công vân
 tay/camera thực tế. Dùng để rà soát/đối chiếu, không dùng trực tiếp để tính
-lương. Chi tiết giả định xử lý dữ liệu xem trong sheet "4.GhiChu" của file
+lương. Chi tiết giả định xử lý dữ liệu xem trong sheet "5.GhiChu" của file
 Excel xuất ra, hoặc tab "Cài đặt" của trang.
+
+**Tự kiểm tra dữ liệu đầu vào:** công cụ tự lọc bỏ các sự kiện rơi ra ngoài
+tháng đang chấm công (VD file "chi phí chi tiết" đôi khi kèm vài dòng gối
+đầu từ cuối tháng trước) và báo rõ số lượng đã loại. Nếu 1 file có tỉ lệ
+dòng không đọc được ngày/giờ vượt 20%, trang sẽ hiện khung đỏ cảnh báo nghi
+ngờ HIS đã đổi cấu trúc cột — khi đó dừng lại, kiểm tra file gốc trước khi
+dùng kết quả.
 
 ---
 *Câu hỏi/lỗi phát sinh: xem lại đúng cấu trúc cột 3 file đầu vào trước, vì

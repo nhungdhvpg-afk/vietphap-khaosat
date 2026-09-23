@@ -141,9 +141,12 @@ function makeNameRegistry() {
 // ---------------------------------------------------------------------------
 // PHÂN TÍCH NGÀY GIỜ
 // ---------------------------------------------------------------------------
+// Chấp nhận ngày/giờ 1 hoặc 2 chữ số (VD "1/8/2026 7:4" lẫn "01/08/2026 07:04")
+// dù dữ liệu HIS hiện tại luôn xuất đủ 2 chữ số — phòng trường hợp một bản
+// xuất báo cáo sau này đổi định dạng, tránh âm thầm bỏ sót cả dòng dữ liệu.
 function parseDT(s) {
   if (!s) return null;
-  const m = String(s).trim().match(/^(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2})(?::(\d{2}))?$/);
+  const m = String(s).trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?$/);
   if (!m) return null;
   const [, dd, mo, yyyy, hh, mi, ss] = m;
   return new Date(Number(yyyy), Number(mo) - 1, Number(dd), Number(hh), Number(mi), Number(ss || 0));
@@ -151,7 +154,7 @@ function parseDT(s) {
 
 function dateKeyOf(d) { return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`; }
 
-const RANGE_RE = /^(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2})-(\d{2}):(\d{2})/;
+const RANGE_RE = /^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{1,2})-(\d{1,2}):(\d{1,2})/;
 function parseRange(s) {
   if (!s) return null;
   const m = String(s).trim().match(RANGE_RE);
@@ -176,13 +179,16 @@ async function readWorkbookRows(file) {
 function readFile1_ChiPhi(rows, reg) {
   const events = [];
   const seen = new Set();
+  let dataRows = 0, dateParseFailures = 0;
   for (let i = 1; i < rows.length; i++) {
     const row = rows[i];
     if (!row) continue;
     const shs = row[0], hoten = row[2], tenkp = row[18], ngayYl = row[26], bacsi = row[30];
-    if (!bacsi || !ngayYl) continue;
+    if (!bacsi) continue;
+    dataRows++;
+    if (!ngayYl) continue;
     const dt = parseDT(ngayYl);
-    if (!dt) continue;
+    if (!dt) { dateParseFailures++; continue; }
     const key = reg.register(bacsi);
     const dedupKey = `${key}|${shs}|${dt.getTime()}`;
     if (seen.has(dedupKey)) continue;
@@ -193,19 +199,22 @@ function readFile1_ChiPhi(rows, reg) {
       detail: `BN ${hoten || ''}`, source: '1-ChiPhi',
     });
   }
-  return events;
+  return { events, dataRows, dateParseFailures };
 }
 
 function readFile2_CLS(rows, reg) {
   const events = [];
+  let dataRows = 0, dateParseFailures = 0;
   for (let r = 8; r < rows.length; r++) {
     const row = rows[r];
     if (!row) continue;
     const makcb = row[1];
     if (!makcb) continue;
+    dataRows++;
     const hoten = row[2], khoaCd = row[8], bsChiDinh = row[10], yeuCau = row[11];
     const bsDocKq = row[14], ngayLam = row[15], ngayLap = row[16];
     const dtLam = parseDT(ngayLam), dtLap = parseDT(ngayLap);
+    if ((ngayLam || ngayLap) && !dtLam && !dtLap) dateParseFailures++;
     if (bsChiDinh) {
       const key = reg.register(bsChiDinh);
       const dt = dtLap || dtLam;
@@ -217,21 +226,23 @@ function readFile2_CLS(rows, reg) {
       if (dt) events.push({ person: key, dateKey: dateKeyOf(dt), start: dt, end: null, role: 'BS đọc KQ CLS', patient: makcb, dept: khoaCd, detail: `${yeuCau || ''} - BN ${hoten || ''}`, source: '2-CLS' });
     }
   }
-  return events;
+  return { events, dataRows, dateParseFailures };
 }
 
 function readFile3_ThuThuat(rows, reg) {
   const events = [];
   let missingPerformer = 0;
+  let dataRows = 0, dateParseFailures = 0;
   for (let r = 7; r < rows.length; r++) {
     const row = rows[r];
     if (!row) continue;
     const makcb = row[1];
     if (!makcb) continue;
+    dataRows++;
     const hoten = row[2], ppTt = row[9], ngayGio = row[11];
     const ttvChinh = row[13], ttvPhu = row[14], gayMe = row[15], giupViec = row[16];
     const parsed = parseRange(ngayGio);
-    if (!parsed) continue;
+    if (!parsed) { if (ngayGio) dateParseFailures++; continue; }
     const { dateKey, start, end } = parsed;
     const performer = ttvChinh || ttvPhu;
     const assistant = ttvChinh ? ttvPhu : null;
@@ -242,7 +253,7 @@ function readFile3_ThuThuat(rows, reg) {
     if (gayMe) events.push({ person: reg.register(gayMe), dateKey, start, end, role: 'Gây mê', patient: makcb, dept: 'YHCT/Thủ thuật', detail, source: '3-ThuThuat' });
     if (giupViec) events.push({ person: reg.register(giupViec), dateKey, start, end, role: 'Giúp việc', patient: makcb, dept: 'YHCT/Thủ thuật', detail, source: '3-ThuThuat' });
   }
-  return { events, missingPerformer };
+  return { events, missingPerformer, dataRows, dateParseFailures };
 }
 
 // ---------------------------------------------------------------------------
@@ -459,15 +470,37 @@ $('#btn-process').addEventListener('click', async () => {
   $('#process-status').innerHTML = '<span class="spinner"></span>Đang xử lý dữ liệu...';
   try {
     const reg = makeNameRegistry();
-    const ev1 = readFile1_ChiPhi(detectedRows.chiphi, reg);
-    const ev2 = readFile2_CLS(detectedRows.cls, reg);
-    const { events: ev3, missingPerformer } = readFile3_ThuThuat(detectedRows.thuthuat, reg);
-    const allEvents = [...ev1, ...ev2, ...ev3];
-    if (allEvents.length === 0) throw new Error('Không tìm thấy dữ liệu hợp lệ trong 3 file đã chọn — kiểm tra lại đúng file/đúng cấu trúc cột.');
+    const { events: ev1, dataRows: dr1, dateParseFailures: dpf1 } = readFile1_ChiPhi(detectedRows.chiphi, reg);
+    const { events: ev2, dataRows: dr2, dateParseFailures: dpf2 } = readFile2_CLS(detectedRows.cls, reg);
+    const { events: ev3, missingPerformer, dataRows: dr3, dateParseFailures: dpf3 } = readFile3_ThuThuat(detectedRows.thuthuat, reg);
+    const rawAllEvents = [...ev1, ...ev2, ...ev3];
+    if (rawAllEvents.length === 0) throw new Error('Không tìm thấy dữ liệu hợp lệ trong 3 file đã chọn — kiểm tra lại đúng file/đúng cấu trúc cột.');
 
-    const { month, year } = detectMonthYear(allEvents);
+    // Cảnh báo sớm nếu 1 file có tỉ lệ dòng KHÔNG đọc được ngày/giờ bất thường
+    // cao (>20%) — dấu hiệu HIS đã đổi cấu trúc cột dù tiêu đề vẫn khớp lúc
+    // nhận diện, tránh âm thầm bỏ sót cả mảng dữ liệu mà không ai hay.
+    const yieldWarnings = [];
+    const checkYield = (label, dataRows, failures) => {
+      if (dataRows > 0 && failures / dataRows > 0.2) {
+        yieldWarnings.push(`${label}: ${failures}/${dataRows} dòng (${Math.round((failures / dataRows) * 100)}%) không đọc được ngày/giờ`);
+      }
+    };
+    checkYield('Bảng kê chi phí chi tiết', dr1, dpf1);
+    checkYield('Sổ kết quả CLS', dr2, dpf2);
+    checkYield('Sổ thủ thuật', dr3, dpf3);
+
+    const { month, year } = detectMonthYear(rawAllEvents);
+    // File "chi phí chi tiết" đôi khi kèm theo vài dòng gối đầu từ kỳ trước
+    // (VD đợt khám bắt đầu cuối tháng trước). Chỉ giữ lại sự kiện đúng tháng
+    // đã phát hiện để "Ngày có dữ liệu"/cảnh báo/bảng chấm công không bị lẫn
+    // dữ liệu ngoài kỳ báo cáo — nhưng vẫn báo rõ số lượng đã loại để đối
+    // chiếu nếu cần.
+    const ymPrefix = `${year}-${pad2(month)}`;
+    const allEvents = rawAllEvents.filter((e) => e.dateKey.startsWith(ymPrefix));
+    const outOfScopeCount = rawAllEvents.length - allEvents.length;
+
     const warnings = detectWarnings(allEvents);
-    lastResult = { events: allEvents, warnings, month, year, reg, missingPerformer, counts: { ev1: ev1.length, ev2: ev2.length, ev3: ev3.length } };
+    lastResult = { events: allEvents, warnings, month, year, reg, missingPerformer, outOfScopeCount, yieldWarnings, counts: { ev1: ev1.length, ev2: ev2.length, ev3: ev3.length } };
     renderResults(lastResult);
     $('#process-status').textContent = `Xong — ${allEvents.length} sự kiện, ${warnings.length} cảnh báo.`;
   } catch (e) {
@@ -483,7 +516,7 @@ $('#btn-process').addEventListener('click', async () => {
 // HIỂN THỊ KẾT QUẢ
 // ---------------------------------------------------------------------------
 function renderResults(result) {
-  const { events, warnings, month, year, reg, missingPerformer } = result;
+  const { events, warnings, month, year, reg, missingPerformer, outOfScopeCount, yieldWarnings } = result;
   const daysInMonth = new Date(year, month, 0).getDate();
   const persons = [...new Set(events.map((e) => e.person))].sort((a, b) => reg.displayName(a).localeCompare(reg.displayName(b), 'vi'));
   const byPersonDay = groupByPersonDay(events);
@@ -519,8 +552,14 @@ function renderResults(result) {
     <span class="muted">File tải về gồm: Chấm công chi tiết · Chấm công rút gọn · Chi tiết hoạt động · Cảnh báo · Ghi chú &amp; căn cứ pháp lý.</span>
   </div>`;
 
+  if (yieldWarnings && yieldWarnings.length) {
+    html += `<div class="error-box" style="display:block;"><b>Nghi ngờ sai lệch cấu trúc file đầu vào:</b><br>${yieldWarnings.map(escapeHtml).join('<br>')}<br>Kiểm tra lại đúng bản mẫu HIS gốc trước khi dùng kết quả này.</div>`;
+  }
   if (missingPerformer > 0) {
     html += `<div class="info-box" style="display:block;">Sổ thủ thuật có ${missingPerformer} dòng không xác định được người thực hiện (cả "TTV chính" và "TTV phụ" đều trống) — các dòng này không được tính vào bảng chấm công.</div>`;
+  }
+  if (outOfScopeCount > 0) {
+    html += `<div class="info-box" style="display:block;">Đã loại ${outOfScopeCount} sự kiện rơi ra ngoài tháng ${pad2(month)}/${year} (thường do file "chi phí chi tiết" kèm theo vài dòng gối đầu từ kỳ trước, VD đợt khám bắt đầu từ cuối tháng trước) — không tính vào bảng chấm công/cảnh báo của kỳ này.</div>`;
   }
 
   // ---- Bảng chấm công chi tiết (giờ sớm nhất - muộn nhất mỗi ngày) ----
@@ -634,7 +673,7 @@ function renderResults(result) {
 // hiện có của module Chia thủ thuật)
 // ---------------------------------------------------------------------------
 function exportExcel(result) {
-  const { events, warnings, month, year, reg, missingPerformer } = result;
+  const { events, warnings, month, year, reg, missingPerformer, outOfScopeCount } = result;
   const daysInMonth = new Date(year, month, 0).getDate();
   const persons = [...new Set(events.map((e) => e.person))].sort((a, b) => reg.displayName(a).localeCompare(reg.displayName(b), 'vi'));
   const byPersonDay = groupByPersonDay(events);
@@ -721,6 +760,7 @@ function exportExcel(result) {
     "  - File 3 (Sổ thủ thuật): thời gian lấy từ cột 'Ngày/giờ TT' (dạng DD/MM/YYYY HH:MM-HH:MM).", '',
     '2. GIẢ ĐỊNH XỬ LÝ QUAN TRỌNG (CẦN NGƯỜI PHỤ TRÁCH NHÂN SỰ XÁC NHẬN LẠI)',
     `  - Trong file Sổ thủ thuật, cột 'TTV chính' phần lớn để trống và tên người thực hiện thực tế lại nằm ở cột 'TTV phụ' (${missingPerformer} dòng không xác định được người thực hiện rõ ràng). Công cụ tự động dùng 'TTV phụ' làm người thực hiện chính khi 'TTV chính' bỏ trống.`,
+    `  - Đã loại ${outOfScopeCount || 0} sự kiện rơi ra ngoài tháng ${pad2(month)}/${year} khỏi toàn bộ báo cáo này (thường do file 'chi phí chi tiết' kèm vài dòng gối đầu từ kỳ trước) — chỉ giữ lại đúng phạm vi 1 tháng để không lẫn dữ liệu ngoài kỳ.`,
     "  - 'Giờ hoạt động' trong bảng chấm công là GIỜ ĐẦU - GIỜ CUỐI của tất cả sự kiện hệ thống ghi nhận trong ngày, KHÔNG PHẢI giờ vào/ra thực tế qua máy chấm công. Chỉ mang tính tham chiếu, đối chiếu.",
     '  - Tên nhân sự được gộp theo họ tên không phân biệt hoa/thường. Nếu có 2 người trùng tên, cần bổ sung mã nhân viên/SĐT để tách riêng.', '',
     '3. CĂN CỨ PHÁP LÝ / QUY ĐỊNH THAM CHIẾU (BHYT)',
