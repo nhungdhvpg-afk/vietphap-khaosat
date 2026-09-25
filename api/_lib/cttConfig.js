@@ -57,6 +57,7 @@ async function loadCttConfig(date) {
       perform_roles: p.perform_roles || [],
       monitor_roles: p.monitor_roles || [],
       is_exam: p.is_exam,
+      price: p.price || 0,
       fixed_monitor_staff_id: fixedMonitorByProcId.get(p.id) || null,
     };
   }

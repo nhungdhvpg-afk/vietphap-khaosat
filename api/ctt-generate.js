@@ -63,24 +63,45 @@ module.exports = async (req, res) => {
       return;
     }
 
-    // Số suất muốn dành cho bệnh nhân mới nhập viện thêm sau (sáng/chiều) —
+    // Số suất muốn dành cho bệnh nhân mới nhập viện thêm sau (sáng/chiều), và
+    // trong số đó, tối thiểu bao nhiêu suất bắt buộc nằm SAU mốc muộn (giờ
+    // kết thúc ca trừ 60 phút, VD 10h30 sáng/16h00 chiều — không đủ giờ cho
+    // phác đồ đầy đủ nên nhóm này tự dùng phác đồ RÚT GỌN nhiều tiền nhất) —
     // nếu request này không truyền lên (VD chia lại cùng ngày mà không đổi ý
     // định), dùng lại đúng giá trị đã lưu trước đó cho ngày này (hệ thống tự
     // "ghi nhớ", không cần nhập lại mỗi lần).
     let reservedMorning = 0;
     let reservedAfternoon = 0;
+    let minCheckpointMorning = 0;
+    let minCheckpointAfternoon = 0;
     if (req.body && req.body.reservedSlots && typeof req.body.reservedSlots === 'object') {
       reservedMorning = Math.max(0, Math.floor(Number(req.body.reservedSlots.morning) || 0));
       reservedAfternoon = Math.max(0, Math.floor(Number(req.body.reservedSlots.afternoon) || 0));
+      const minAfterCheckpoint = req.body.minAfterCheckpoint || {};
+      minCheckpointMorning = Math.max(0, Math.floor(Number(minAfterCheckpoint.morning) || 0));
+      minCheckpointAfternoon = Math.max(0, Math.floor(Number(minAfterCheckpoint.afternoon) || 0));
       const { error: reserveErr } = await db
         .from('ctt_reserved_slots')
-        .upsert({ date, morning_slots: reservedMorning, afternoon_slots: reservedAfternoon, updated_at: new Date().toISOString() });
+        .upsert({
+          date,
+          morning_slots: reservedMorning,
+          afternoon_slots: reservedAfternoon,
+          min_after_checkpoint_morning: minCheckpointMorning,
+          min_after_checkpoint_afternoon: minCheckpointAfternoon,
+          updated_at: new Date().toISOString(),
+        });
       if (reserveErr) throw reserveErr;
     } else {
-      const { data: reserveRow } = await db.from('ctt_reserved_slots').select('morning_slots, afternoon_slots').eq('date', date).maybeSingle();
+      const { data: reserveRow } = await db
+        .from('ctt_reserved_slots')
+        .select('morning_slots, afternoon_slots, min_after_checkpoint_morning, min_after_checkpoint_afternoon')
+        .eq('date', date)
+        .maybeSingle();
       if (reserveRow) {
         reservedMorning = reserveRow.morning_slots;
         reservedAfternoon = reserveRow.afternoon_slots;
+        minCheckpointMorning = reserveRow.min_after_checkpoint_morning || 0;
+        minCheckpointAfternoon = reserveRow.min_after_checkpoint_afternoon || 0;
       }
     }
     schedulerConfig.reservedSlotsByShift = [reservedMorning, reservedAfternoon];
@@ -90,12 +111,31 @@ module.exports = async (req, res) => {
     // thành từng dòng có giờ giấc/nhân sự/combo cụ thể (không chỉ là 1 con số
     // trừu tượng), và để thuật toán THỰC SỰ giữ được chỗ đó (xem cttScheduler.js:
     // BNM được xếp ưu tiên TRƯỚC bệnh nhân ngoại trú, chỉ sau người ra viện
-    // hôm nay, nên không bao giờ bị danh sách ngoại trú "ăn" mất suất).
+    // hôm nay, nên không bao giờ bị danh sách ngoại trú "ăn" mất suất). Trong
+    // mỗi buổi, N suất ĐẦU (N = số tối thiểu sau mốc muộn) được đánh dấu
+    // "checkpoint" — ép nằm sau mốc muộn, chấp nhận phác đồ rút gọn; số còn
+    // lại là "tail" — vẫn xếp muộn nhất có thể với phác đồ đầy đủ như trước.
     for (let i = 1; i <= reservedMorning; i++) {
-      cleanPatients.push({ stt: 90000 + i, name: `BNM buổi sáng ${i}`, comboOverride: null, priorityDischarge: false, isPlaceholder: true, placeholderShift: 'morning' });
+      cleanPatients.push({
+        stt: 90000 + i,
+        name: `BNM buổi sáng ${i}`,
+        comboOverride: null,
+        priorityDischarge: false,
+        isPlaceholder: true,
+        placeholderShift: 'morning',
+        placeholderTier: i <= minCheckpointMorning ? 'checkpoint' : 'tail',
+      });
     }
     for (let i = 1; i <= reservedAfternoon; i++) {
-      cleanPatients.push({ stt: 95000 + i, name: `BNM buổi chiều ${i}`, comboOverride: null, priorityDischarge: false, isPlaceholder: true, placeholderShift: 'afternoon' });
+      cleanPatients.push({
+        stt: 95000 + i,
+        name: `BNM buổi chiều ${i}`,
+        comboOverride: null,
+        priorityDischarge: false,
+        isPlaceholder: true,
+        placeholderShift: 'afternoon',
+        placeholderTier: i <= minCheckpointAfternoon ? 'checkpoint' : 'tail',
+      });
     }
 
     // Xoá dữ liệu cũ của ngày này (nếu có) để chia lại từ đầu.
@@ -115,8 +155,9 @@ module.exports = async (req, res) => {
         priority_discharge: p.priorityDischarge,
         is_placeholder: p.isPlaceholder === true,
         placeholder_shift: p.placeholderShift || null,
+        placeholder_tier: p.placeholderTier || null,
       })))
-      .select('id, stt, name, combo_override, priority_discharge, is_placeholder, placeholder_shift');
+      .select('id, stt, name, combo_override, priority_discharge, is_placeholder, placeholder_shift, placeholder_tier');
     if (patientInsertError) throw patientInsertError;
 
     const patientForScheduler = insertedPatients.map((p) => ({
@@ -127,6 +168,7 @@ module.exports = async (req, res) => {
       priorityDischarge: p.priority_discharge,
       isPlaceholder: p.is_placeholder,
       placeholderShift: p.placeholder_shift,
+      placeholderTier: p.placeholder_tier,
     }));
     const result = generateSchedule(schedulerConfig, patientForScheduler);
 
@@ -201,6 +243,7 @@ module.exports = async (req, res) => {
         startLabel: minutesToHHMM(s.start),
         endLabel: minutesToHHMM(s.end),
         reservedSlots: schedulerConfig.reservedSlotsByShift[i] || 0,
+        minAfterCheckpoint: i === 0 ? minCheckpointMorning : minCheckpointAfternoon,
         remainingFit: cap.fit,
         remainingAtLeast: cap.atLeast,
       };

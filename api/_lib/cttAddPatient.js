@@ -88,9 +88,17 @@ module.exports = async function addPatient(req, res) {
       const attemptConfig = { ...schedulerConfig, shifts: [shiftWindow], existingScheduleEntries, forcedExamFloor: desiredStartMinutes };
       return generateSchedule(attemptConfig, [{ id: newPatientId, stt: sttNum, name: cleanName, comboOverride: forcedCombo || null }]);
     };
+    // Không đủ giờ cho đủ 4 bước (VD nhận bệnh nhân sát giờ đóng cửa) -> theo
+    // đúng nguyên tắc đã thống nhất với bác sĩ: RÚT GỌN thay vì từ chối thẳng,
+    // ưu tiên tổ hợp thủ thuật NHIỀU TIỀN NHẤT vẫn kịp hoàn thành đúng giờ.
+    const runReduced = () => {
+      const attemptConfig = { ...schedulerConfig, shifts: [shiftWindow], existingScheduleEntries, forcedExamFloor: desiredStartMinutes };
+      return generateSchedule(attemptConfig, [{ id: newPatientId, stt: sttNum, name: cleanName, allowRevenueFallback: true }]);
+    };
 
     let result = runOne(comboOverride || null);
     let usedCombo = comboOverride || null;
+    let reduced = false;
 
     if (result.warnings.length > 0 && comboOverride) {
       // Combo yêu cầu quá tải đúng giờ này -> thử để hệ thống tự chọn combo
@@ -107,23 +115,37 @@ module.exports = async function addPatient(req, res) {
         });
         return;
       }
-      res.status(200).json({
-        ok: false,
-        overloaded: true,
-        message: `Combo ${comboOverride} hiện quá tải lúc ${desiredStart} (buổi ${shift === 'morning' ? 'sáng' : 'chiều'}), và thử các combo khác cũng không đủ chỗ đúng giờ này. Thử chọn giờ khác hoặc buổi khác.`,
-        suggestedCombo: null,
-      });
-      return;
-    }
-
-    if (result.warnings.length > 0) {
-      res.status(200).json({
-        ok: false,
-        overloaded: true,
-        message: `Không đủ chỗ (máy/nhân sự) để xếp đủ 4 bước bắt đầu từ ${desiredStart} (buổi ${shift === 'morning' ? 'sáng' : 'chiều'}). Thử chọn giờ khác hoặc buổi khác.`,
-        missingSteps: result.warnings[0]?.missingSteps || [],
-      });
-      return;
+      // Auto cũng không đủ chỗ cho ĐỦ 4 bước -> thử phác đồ rút gọn trước khi báo lỗi hẳn.
+      const reducedResult = runReduced();
+      if (reducedResult.warnings.length === 0) {
+        result = reducedResult;
+        usedCombo = null;
+        reduced = true;
+      } else {
+        res.status(200).json({
+          ok: false,
+          overloaded: true,
+          message: `Combo ${comboOverride} hiện quá tải lúc ${desiredStart} (buổi ${shift === 'morning' ? 'sáng' : 'chiều'}), và không còn đủ giờ cho bất kỳ tổ hợp thủ thuật nào (kể cả rút gọn). Thử chọn giờ khác hoặc buổi khác.`,
+          suggestedCombo: null,
+        });
+        return;
+      }
+    } else if (result.warnings.length > 0) {
+      // Không ép combo cụ thể mà vẫn không đủ giờ cho đủ 4 bước -> thử rút gọn.
+      const reducedResult = runReduced();
+      if (reducedResult.warnings.length === 0) {
+        result = reducedResult;
+        usedCombo = null;
+        reduced = true;
+      } else {
+        res.status(200).json({
+          ok: false,
+          overloaded: true,
+          message: `Không đủ giờ cho bất kỳ tổ hợp thủ thuật nào (kể cả rút gọn) bắt đầu từ ${desiredStart} (buổi ${shift === 'morning' ? 'sáng' : 'chiều'}). Thử chọn giờ khác hoặc buổi khác.`,
+          missingSteps: reducedResult.warnings[0]?.missingSteps || result.warnings[0]?.missingSteps || [],
+        });
+        return;
+      }
     }
 
     // Thành công — LƯU vào CSDL. Chỉ ghi bệnh nhân + lượt của người MỚI,
@@ -170,6 +192,10 @@ module.exports = async function addPatient(req, res) {
       patient: { id: newPatientId, stt: sttNum, name: cleanName },
       scheduleEntries: newEntries,
       usedCombo: usedCombo || newEntries.find((e) => e.comboCode)?.comboCode || null,
+      reduced,
+      reducedMessage: reduced
+        ? `Không đủ giờ cho đủ 4 bước — đã xếp phác đồ RÚT GỌN (${newEntries.map((e) => e.procedureCode).join(' + ')}), ưu tiên tổ hợp nhiều tiền nhất vẫn kịp hoàn thành trước giờ đóng cửa.`
+        : null,
     });
   } catch (e) {
     console.error('ctt-add-patient error', e);

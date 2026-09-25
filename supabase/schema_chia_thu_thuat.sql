@@ -55,6 +55,7 @@ create table if not exists ctt_procedure_types (
   perform_roles         text[] not null,  -- vai trò được PHÉP thực hiện (VD: {BS,YS})
   monitor_roles         text[],           -- vai trò được phép theo dõi (null nếu can_split=false)
   is_exam               boolean not null default false, -- true = Khám/Chỉ định (không nằm trong phác đồ tự động)
+  price                 int not null default 0, -- đơn giá (đồng/lượt) — dùng để chọn phác đồ RÚT GỌN nhiều tiền nhất khi không đủ giờ
   active                boolean not null default true,
   created_at            timestamptz not null default now(),
   updated_at            timestamptz not null default now()
@@ -111,6 +112,7 @@ create table if not exists ctt_patients (
   priority_discharge boolean not null default false, -- true = cần ra viện hôm nay, ưu tiên khung giờ sớm nhất
   is_placeholder boolean not null default false, -- true = bệnh nhân "giữ chỗ" BNM (suất để dành), không phải người thật
   placeholder_shift text check (placeholder_shift in ('morning', 'afternoon')), -- buổi bị khoá cứng, chỉ có nghĩa khi is_placeholder=true
+  placeholder_tier text check (placeholder_tier in ('checkpoint', 'tail')), -- 'checkpoint' = ép sau mốc muộn (rút gọn), 'tail' = muộn nhất có thể (đủ 4 bước)
   created_at   timestamptz not null default now(),
   unique (date, stt)
 );
@@ -121,6 +123,11 @@ create table if not exists ctt_reserved_slots (
   date            date primary key,
   morning_slots   int not null default 0,
   afternoon_slots int not null default 0,
+  -- Số suất trong "morning_slots"/"afternoon_slots" bắt buộc phải nằm SAU
+  -- mốc muộn (giờ kết thúc ca trừ 60 phút) — không đủ giờ cho phác đồ đầy đủ
+  -- nên nhóm này tự động dùng phác đồ rút gọn nhiều tiền nhất khi cần.
+  min_after_checkpoint_morning   int not null default 0,
+  min_after_checkpoint_afternoon int not null default 0,
   updated_at      timestamptz not null default now()
 );
 
@@ -166,19 +173,20 @@ create index if not exists idx_ctt_schedule_staffs_staff on ctt_schedule_staffs 
 -- trong màn hình "Cài đặt" của module sau khi triển khai).
 -- ============================================================================
 
--- 7 loại thủ thuật chuẩn của Việt Pháp
+-- 7 loại thủ thuật chuẩn của Việt Pháp (rest_after_minutes của Xông hơi = 0:
+-- theo thống nhất với bác sĩ chuyên môn, không cần nghỉ bắt buộc sau xông)
 insert into ctt_procedure_types
   (code, name, duration_minutes, requires_machine, machine_type, rest_after_minutes,
-   can_split, active_minutes, monitor_minutes, monitor_max_patients, perform_roles, monitor_roles, is_exam)
+   can_split, active_minutes, monitor_minutes, monitor_max_patients, perform_roles, monitor_roles, is_exam, price)
 values
-  ('XBBH', 'Xoa bóp bấm huyệt', 30, false, null, 0, false, null, null, 10, array['BS','YS'],    null, false),
-  ('DC',   'Điện châm',         25, true,  'CHAM', 0, true,  6,   19,  4,  array['BS','YS'],    array['DD'], false),
-  ('HC',   'Hào châm',          25, false, null,   0, true,  5,   20,  8,  array['BS','YS'],    array['DD'], false),
-  ('TC',   'Thủy châm',         25, false, null,   0, true,  11,  14,  4,  array['BS'],         array['DD'], false),
-  ('XH',   'Xông hơi',          15, true,  'XONG', 15, false, null, null, 10, array['YS'],        null, false),
-  ('CN',   'Cứu ngải',          15, false, null,   0, false, null, null, 10, array['BS','YS'],    null, false),
-  ('GH',   'Giác hơi',          15, false, null,   0, false, null, null, 10, array['BS','YS'],    null, false),
-  ('KH',   'Khám / Chỉ định',    5, false, null,   0, false, null, null, 10, array['BS'],         null, true)
+  ('XBBH', 'Xoa bóp bấm huyệt', 30, false, null, 0, false, null, null, 10, array['BS','YS'],    null, false, 76000),
+  ('DC',   'Điện châm',         25, true,  'CHAM', 0, true,  6,   19,  4,  array['BS','YS'],    array['DD'], false, 78300),
+  ('HC',   'Hào châm',          25, false, null,   0, true,  5,   20,  8,  array['BS','YS'],    array['DD'], false, 76300),
+  ('TC',   'Thủy châm',         25, false, null,   0, true,  11,  14,  4,  array['BS'],         array['DD'], false, 77100),
+  ('XH',   'Xông hơi',          15, true,  'XONG', 0, false, null, null, 10, array['YS'],        null, false, 50000),
+  ('CN',   'Cứu ngải',          15, false, null,   0, false, null, null, 10, array['BS','YS'],    null, false, 37000),
+  ('GH',   'Giác hơi',          15, false, null,   0, false, null, null, 10, array['BS','YS'],    null, false, 0),
+  ('KH',   'Khám / Chỉ định',    5, false, null,   0, false, null, null, 10, array['BS'],         null, true, 0)
 on conflict (code) do nothing;
 
 -- 3 combo chính thức theo hồ sơ gốc (nhãn hiển thị — thuật toán tự chọn biến

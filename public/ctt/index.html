@@ -124,6 +124,17 @@
             <input type="number" id="input-reserved-afternoon" min="0" value="0">
           </div>
         </div>
+        <div class="row">
+          <div style="max-width:260px;">
+            <label>Trong đó, tối thiểu bao nhiêu suất sáng phải sau mốc muộn (giờ kết thúc ca sáng trừ 60')</label>
+            <input type="number" id="input-checkpoint-morning" min="0" value="0">
+          </div>
+          <div style="max-width:260px;">
+            <label>Trong đó, tối thiểu bao nhiêu suất chiều phải sau mốc muộn (giờ kết thúc ca chiều trừ 60')</label>
+            <input type="number" id="input-checkpoint-afternoon" min="0" value="0">
+          </div>
+        </div>
+        <p class="muted" style="margin-top:2px;">Số suất "sau mốc muộn" không đủ giờ làm trọn 4 bước — hệ thống tự chọn phác đồ RÚT GỌN (tối thiểu 2 bước, ưu tiên tổ hợp nhiều tiền nhất vẫn kịp giờ) cho đúng số suất này; phần còn lại trong ô "số suất dành riêng" ở trên vẫn xếp đủ 4 bước, muộn nhất có thể.</p>
         <label style="margin-top:14px;">Dán nhanh (mỗi dòng: STT rồi đến Họ tên, cách nhau bằng dấu Tab, phẩy hoặc khoảng trắng)</label>
         <textarea id="paste-area" rows="4" placeholder="1  Nguyễn Văn A&#10;2  Trần Thị B&#10;3, Lê Văn C"></textarea>
         <div style="margin-top:8px;">

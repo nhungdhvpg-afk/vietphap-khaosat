@@ -764,6 +764,85 @@ function generateSchedule(config, patients) {
     return { ok: missing.length === 0, missing, comboCode, usedStep4 };
   }
 
+  // Số bước tối thiểu chấp nhận được khi phải RÚT GỌN phác đồ do không đủ
+  // giờ (VD suất giữ chỗ bị ép sau mốc muộn 10h30/16h00, hoặc bệnh nhân mới
+  // thêm vào sát giờ đóng cửa qua "+ Thêm 1 dòng") — dưới mức này coi như
+  // không đủ để tính là 1 lượt khám có giá trị, báo thiếu giờ thay vì xếp.
+  const MIN_REDUCED_STEPS = 2;
+
+  /** Thử xếp CHÍNH XÁC danh sách mã thủ thuật `procCodes` (đã chọn cụ thể,
+   * không còn phương án dự phòng nào khác) cho 1 bệnh nhân, theo thứ tự
+   * LINH HOẠT (luôn chọn bước nào xong sớm nhất trước, giống hệt tinh thần
+   * attemptPatientInShift) — dùng cho phác đồ RÚT GỌN khi không đủ giờ làm
+   * trọn 4 bước. Không tự rollback — bên gọi chịu trách nhiệm chụp/khôi
+   * phục trạng thái quanh lời gọi này. */
+  function attemptStepsInShift(patientId, procCodes, shiftWindow, notBefore) {
+    activeShifts = [shiftWindow];
+    const patientState = { id: patientId, cursor: Math.max(shiftWindow.start, notBefore ?? shiftWindow.start) };
+    const pending = new Set(procCodes);
+    while (pending.size > 0) {
+      let best = null;
+      for (const code of pending) {
+        const proc = procByCode[code];
+        if (!proc) continue;
+        const plan = proc.can_split
+          ? planSplitProcedure(proc, patientState.cursor, fixedMonitorFor(proc))
+          : planSimpleProcedure(proc, patientState.cursor);
+        if (plan && (!best || plan.end < best.plan.end)) best = { code, plan };
+      }
+      if (!best) return { ok: false, missing: Array.from(pending) };
+      const proc = procByCode[best.code];
+      if (proc.can_split) commitSplit(proc, best.plan, patientState);
+      else commitSimple(proc, best.plan, patientState);
+      pending.delete(best.code);
+    }
+    return { ok: true, missing: [] };
+  }
+
+  /** Liệt kê mọi tổ hợp thủ thuật HỢP LỆ (Xoa bóp có/không + đúng 1 trong
+   * Điện/Hào châm hoặc bỏ + Thủy châm có/không + đúng 1 trong Xông/Cứu ngải
+   * hoặc bỏ), tối thiểu MIN_REDUCED_STEPS bước, sắp xếp theo TỔNG TIỀN giảm
+   * dần — dùng để tìm phác đồ rút gọn "nhiều tiền nhất có thể" khi không đủ
+   * giờ làm trọn 4 bước. Giá lấy từ `procedures[code].price` (đ/lượt). */
+  function reducedComboCandidates() {
+    const priceOf = (code) => (code && procByCode[code] ? procByCode[code].price || 0 : 0);
+    const candidates = [];
+    for (const a of ['XBBH', null]) {
+      for (const b of ['DC', 'HC', null]) {
+        for (const c of ['TC', null]) {
+          for (const d of ['XH', 'CN', null]) {
+            const codes = [a, b, c, d].filter(Boolean);
+            if (codes.length < MIN_REDUCED_STEPS) continue;
+            const price = codes.reduce((sum, code) => sum + priceOf(code), 0);
+            candidates.push({ codes, price });
+          }
+        }
+      }
+    }
+    candidates.sort((x, y) => y.price - x.price);
+    return candidates;
+  }
+
+  /** Thử LẦN LƯỢT các tổ hợp rút gọn theo đúng thứ tự tiền giảm dần, trả về
+   * tổ hợp ĐẦU TIÊN thực sự xếp được (đủ máy/nhân sự thật, không chỉ đủ về
+   * mặt thời gian lý thuyết) trong `shiftWindow` kể từ `notBefore`. Tự
+   * chụp/khôi phục trạng thái quanh mỗi lần thử — bên gọi không cần rollback
+   * nếu hàm này trả về `ok:false` (đã tự dọn sạch). */
+  function attemptBestRevenueComboInShift(patientId, shiftWindow, notBefore) {
+    for (const cand of reducedComboCandidates()) {
+      const snap = snapshotState();
+      const result = attemptStepsInShift(patientId, cand.codes, shiftWindow, notBefore);
+      if (result.ok) {
+        for (const entry of scheduleEntries) {
+          if (entry.patientId === patientId && !entry.comboCode) entry.comboCode = 'RUTGON:' + cand.codes.join('+');
+        }
+        return { ok: true, codes: cand.codes, price: cand.price };
+      }
+      restoreState(snap);
+    }
+    return { ok: false };
+  }
+
   // Đếm số bệnh nhân đã được "khám xong, chỉ định đi làm thủ thuật" trong
   // TỪNG buổi (theo đúng thứ tự STT xử lý) — dùng để tính examFloor cho bệnh
   // nhân kế tiếp trong buổi đó (xem EXAM_PACING_MINUTES). Chỉ đếm bệnh nhân
@@ -799,9 +878,12 @@ function generateSchedule(config, patients) {
     return xbbh + step2 + step3 + step4 + 3 * transferBufferMinutes + 15;
   }
   const maxComboDuration = estimateMaxComboDuration();
+  // Chỉ đếm nhóm "để dành muộn nhất có thể" (tail) — nhóm "ép sau mốc muộn"
+  // (checkpoint, xem bên dưới) dùng mốc CỐ ĐỊNH riêng, không cộng dồn vào
+  // đây (khác nhóm, không cạnh tranh cùng 1 mốc neo).
   const placeholderCountByShiftStart = new Map();
   for (const p of patients) {
-    if (!p.isPlaceholder) continue;
+    if (!p.isPlaceholder || p.placeholderTier === 'checkpoint') continue;
     const idx = p.placeholderShift === 'morning' ? 0 : (p.placeholderShift === 'afternoon' ? 1 : null);
     if (idx == null || !shifts[idx]) continue;
     const key = shifts[idx].start;
@@ -815,10 +897,23 @@ function generateSchedule(config, patients) {
   }
   const placeholderCounters = new Map();
 
+  // Nhóm "ép sau mốc muộn" (VD tối thiểu 2 suất sau 10h30 buổi sáng / 16h00
+  // buổi chiều) — mốc CỐ ĐỊNH = giờ kết thúc ca trừ LATE_CHECKPOINT_MINUTES_
+  // BEFORE_END phút, KHÔNG đủ cho 1 phác đồ đầy đủ (~101 phút) nên nhóm này
+  // sẽ tự động rơi vào phác đồ RÚT GỌN theo doanh thu (xem vòng lặp chính).
+  const LATE_CHECKPOINT_MINUTES_BEFORE_END = 60;
+  const checkpointAnchorByShiftStart = new Map();
+  for (const s of shifts) checkpointAnchorByShiftStart.set(s.start, Math.max(s.start, s.end - LATE_CHECKPOINT_MINUTES_BEFORE_END));
+  const checkpointCounters = new Map();
+
   function examFloorFor(patient, shiftWindow) {
     // Khi thêm 1 bệnh nhân cụ thể vào lịch có sẵn, người dùng tự chọn giờ
     // bắt đầu — bỏ qua nhịp khám tự động, chỉ đảm bảo không sớm hơn đầu ca.
     if (forcedExamFloor != null) return Math.max(shiftWindow.start, forcedExamFloor);
+    if (patient.isPlaceholder && patient.placeholderTier === 'checkpoint') {
+      const anchor = checkpointAnchorByShiftStart.get(shiftWindow.start) ?? shiftWindow.start;
+      return anchor + EXAM_PACING_MINUTES * (checkpointCounters.get(shiftWindow.start) || 0);
+    }
     if (patient.isPlaceholder) {
       const anchor = placeholderAnchorByShiftStart.get(shiftWindow.start) ?? shiftWindow.start;
       return anchor + EXAM_PACING_MINUTES * (placeholderCounters.get(shiftWindow.start) || 0);
@@ -826,7 +921,9 @@ function generateSchedule(config, patients) {
     return shiftWindow.start + EXAM_PACING_MINUTES * examCounters.get(shiftWindow.start);
   }
   function bumpCounterFor(patient, shiftWindow) {
-    if (patient.isPlaceholder) {
+    if (patient.isPlaceholder && patient.placeholderTier === 'checkpoint') {
+      checkpointCounters.set(shiftWindow.start, (checkpointCounters.get(shiftWindow.start) || 0) + 1);
+    } else if (patient.isPlaceholder) {
       placeholderCounters.set(shiftWindow.start, (placeholderCounters.get(shiftWindow.start) || 0) + 1);
     } else {
       examCounters.set(shiftWindow.start, examCounters.get(shiftWindow.start) + 1);
@@ -844,21 +941,49 @@ function generateSchedule(config, patients) {
       let usedShift = null;
       for (const shiftWindow of candidateShifts) {
         const snap = snapshotState();
-        outcome = attemptPatientInShift(patient, shiftWindow, examFloorFor(patient, shiftWindow));
+        const ownFloor = examFloorFor(patient, shiftWindow);
+        outcome = attemptPatientInShift(patient, shiftWindow, ownFloor);
         if (outcome.ok) { usedShift = shiftWindow; break; }
         restoreState(snap);
-        // Bệnh nhân giữ chỗ BNM: nếu mốc "muộn nhất" ước tính vẫn không đủ
-        // chỗ (VD máy/nhân sự bận hơn dự tính, hoặc nhiều người giữ chỗ dồn
-        // vào cuối buổi tranh nhau tài nguyên) -> BẮT BUỘC vẫn phải giữ được
-        // suất này (đây là yêu cầu cứng, không được phép thất bại), nên thử
-        // lại từ mốc SỚM NHẤT (đã kiểm chứng luôn xếp được, vì được ưu tiên
-        // trước bệnh nhân ngoại trú) — thà xếp sớm còn hơn mất hẳn suất.
+
+        // Suất "ép sau mốc muộn" (checkpoint): mốc này KHÔNG đủ cho phác đồ
+        // đầy đủ (~101 phút) trong khi chỉ còn ~60 phút tới hết ca — nên
+        // trước khi lùi về mốc sớm, thử phác đồ RÚT GỌN nhiều tiền nhất có
+        // thể (tối thiểu 2 bước) đúng ngay tại mốc muộn này, để vẫn giữ được
+        // đúng Ý ĐỊNH "có người trực tới sát giờ đóng cửa".
+        if (patient.isPlaceholder && patient.placeholderTier === 'checkpoint') {
+          const snapR = snapshotState();
+          const reduced = attemptBestRevenueComboInShift(patient.id, shiftWindow, ownFloor);
+          if (reduced.ok) { outcome = { ok: true, missing: [], comboCode: null }; usedShift = shiftWindow; break; }
+          restoreState(snapR);
+        }
+
+        // Bệnh nhân giữ chỗ BNM (cả 2 nhóm): nếu mốc riêng vẫn không đủ chỗ
+        // (VD máy/nhân sự bận hơn dự tính, hoặc nhiều người giữ chỗ dồn vào
+        // cuối buổi tranh nhau tài nguyên) -> BẮT BUỘC vẫn phải giữ được suất
+        // này (yêu cầu cứng, không được phép thất bại), nên thử lại từ mốc
+        // SỚM NHẤT (đã kiểm chứng luôn xếp được, vì được ưu tiên trước bệnh
+        // nhân ngoại trú) — thà xếp sớm/rút gọn còn hơn mất hẳn suất.
         if (patient.isPlaceholder) {
           const snap2 = snapshotState();
           const earlyFloor = shiftWindow.start + EXAM_PACING_MINUTES * (placeholderCounters.get(shiftWindow.start) || 0);
           const fallbackOutcome = attemptPatientInShift(patient, shiftWindow, earlyFloor);
           if (fallbackOutcome.ok) { outcome = fallbackOutcome; usedShift = shiftWindow; break; }
           restoreState(snap2);
+          const snapR2 = snapshotState();
+          const reducedEarly = attemptBestRevenueComboInShift(patient.id, shiftWindow, earlyFloor);
+          if (reducedEarly.ok) { outcome = { ok: true, missing: [], comboCode: null }; usedShift = shiftWindow; break; }
+          restoreState(snapR2);
+        }
+
+        // Bệnh nhân THẬT thêm vào muộn (nút "+ Thêm 1 dòng") khi không đủ
+        // giờ cho đủ 4 bước: cho phép rút gọn để vẫn nhận được (thu tiền
+        // được) thay vì từ chối thẳng — đúng nguyên tắc bác sĩ đã thống nhất.
+        if (!patient.isPlaceholder && patient.allowRevenueFallback) {
+          const snapR3 = snapshotState();
+          const reduced = attemptBestRevenueComboInShift(patient.id, shiftWindow, ownFloor);
+          if (reduced.ok) { outcome = { ok: true, missing: [], comboCode: null }; usedShift = shiftWindow; break; }
+          restoreState(snapR3);
         }
       }
       if (usedShift) bumpCounterFor(patient, usedShift);

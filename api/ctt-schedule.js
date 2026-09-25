@@ -111,12 +111,17 @@ module.exports = async (req, res) => {
     // Còn nhận thêm được bao nhiêu người mỗi buổi — dùng khi CEO/nhân viên mở
     // lại 1 ngày cũ (không chia mới) rồi muốn dùng "+ Thêm 1 dòng" thêm bệnh
     // nhân mới nhập viện ngay lúc đó.
-    const { data: reserveRow } = await db.from('ctt_reserved_slots').select('morning_slots, afternoon_slots').eq('date', date).maybeSingle();
+    const { data: reserveRow } = await db
+      .from('ctt_reserved_slots')
+      .select('morning_slots, afternoon_slots, min_after_checkpoint_morning, min_after_checkpoint_afternoon')
+      .eq('date', date)
+      .maybeSingle();
     const reservedByShift = [reserveRow?.morning_slots || 0, reserveRow?.afternoon_slots || 0];
+    const minCheckpointByShift = [reserveRow?.min_after_checkpoint_morning || 0, reserveRow?.min_after_checkpoint_afternoon || 0];
     const shiftCapacity = schedulerConfig.shifts.map((s, i) => {
       const examCounter = new Set(scheduleEntries.filter((e) => e.start >= s.start && e.start < s.end).map((e) => e.patientId)).size;
       const cap = estimateRemainingCapacity(schedulerConfig, scheduleEntries, i, examCounter);
-      return { start: s.start, end: s.end, startLabel: minutesToHHMM(s.start), endLabel: minutesToHHMM(s.end), reservedSlots: reservedByShift[i], remainingFit: cap.fit, remainingAtLeast: cap.atLeast };
+      return { start: s.start, end: s.end, startLabel: minutesToHHMM(s.start), endLabel: minutesToHHMM(s.end), reservedSlots: reservedByShift[i], minAfterCheckpoint: minCheckpointByShift[i], remainingFit: cap.fit, remainingAtLeast: cap.atLeast };
     });
 
     const summary = { totalPatients, completedPatients: totalPatients - incompletePatients, incompletePatients, comboCount, procedureCount, machineUtilization, shiftCapacity };
