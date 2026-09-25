@@ -76,8 +76,8 @@ async function checkScheduleExists(date) {
       // này — tránh việc để trống ô nhập rồi vô tình "chia lại" mất đi số
       // suất đã dành ra trước đó.
       const sc = result.summary && result.summary.shiftCapacity;
-      if (sc && sc[0]) $('#input-reserved-morning').value = sc[0].reservedSlots || 0;
-      if (sc && sc[1]) $('#input-reserved-afternoon').value = sc[1].reservedSlots || 0;
+      if (sc && sc[0]) { $('#input-reserved-morning').value = sc[0].reservedSlots || 0; $('#input-checkpoint-morning').value = sc[0].minAfterCheckpoint || 0; }
+      if (sc && sc[1]) { $('#input-reserved-afternoon').value = sc[1].reservedSlots || 0; $('#input-checkpoint-afternoon').value = sc[1].minAfterCheckpoint || 0; }
     } else {
       scheduleExistsForDate = null;
       lastGenerateResult = null;
@@ -225,11 +225,15 @@ $('#btn-generate').addEventListener('click', async () => {
     morning: Math.max(0, Math.floor(Number($('#input-reserved-morning').value) || 0)),
     afternoon: Math.max(0, Math.floor(Number($('#input-reserved-afternoon').value) || 0)),
   };
+  const minAfterCheckpoint = {
+    morning: Math.max(0, Math.floor(Number($('#input-checkpoint-morning').value) || 0)),
+    afternoon: Math.max(0, Math.floor(Number($('#input-checkpoint-afternoon').value) || 0)),
+  };
   const btn = $('#btn-generate');
   btn.disabled = true;
   $('#generate-status').textContent = 'Đang chia thủ thuật cho ' + patients.length + ' bệnh nhân...';
   try {
-    const result = await api('/api/ctt-generate', { method: 'POST', body: JSON.stringify({ date, patients, reservedSlots }) });
+    const result = await api('/api/ctt-generate', { method: 'POST', body: JSON.stringify({ date, patients, reservedSlots, minAfterCheckpoint }) });
     lastResult = result;
     lastGenerateResult = result;
     scheduleExistsForDate = date;
@@ -292,6 +296,12 @@ function machineNameOf(e) {
 }
 function comboPillHtml(code) {
   if (!code) return '';
+  // Phác đồ RÚT GỌN (không đủ giờ cho đủ 4 bước, xem cttScheduler.js) —
+  // nhãn dạng "RUTGON:DC+TC", hiển thị rõ là rút gọn + đúng các bước đã làm.
+  if (code.startsWith('RUTGON:')) {
+    const steps = code.slice('RUTGON:'.length);
+    return `<span class="pill pill-warn" title="Không đủ giờ cho đủ 4 bước — đã xếp phác đồ rút gọn nhiều tiền nhất có thể">Rút gọn: ${escapeHtml(steps)}</span>`;
+  }
   const cls = code === 'C1' ? 'pill-c1' : (code === 'C2' ? 'pill-c2' : 'pill-c3');
   return `<span class="pill ${cls}">${code}</span>`;
 }
@@ -862,7 +872,11 @@ $('#btn-modal-submit').addEventListener('click', async () => {
     lastResult = refreshed;
     lastGenerateResult = refreshed;
     renderResults('#results-wrap', refreshed);
-    alert(`Đã thêm bệnh nhân "${name}" (STT ${stt}) vào lịch — combo ${result.usedCombo || '(tự động)'}.`);
+    if (result.reduced) {
+      alert(`Đã thêm bệnh nhân "${name}" (STT ${stt}) vào lịch.\n\n${result.reducedMessage}`);
+    } else {
+      alert(`Đã thêm bệnh nhân "${name}" (STT ${stt}) vào lịch — combo ${result.usedCombo || '(tự động)'}.`);
+    }
   } catch (e) {
     errEl.textContent = e.message;
     errEl.style.display = 'block';
