@@ -537,16 +537,20 @@ function generateSchedule(config, patients) {
   /** Với 1 lượt "khe co dãn" (VD Điện châm/Hào châm, hoặc Xông hơi/Cứu ngải):
    *
    * - Chế độ 'max_xong' (mặc định): ưu tiên phương án "chính" (dùng máy —
-   *   Điện châm/Xông hơi) hơn "dự phòng", NHƯNG chỉ khi chọn phương án chính
-   *   không làm hỏng khả năng hoàn tất các bước còn lại của bệnh nhân. Dùng
-   *   `checkStillFeasible(cursorAfter)` — thử THẬT (không heuristic phỏng
-   *   đoán thời lượng) xem các bước còn lại có còn xếp được không nếu bệnh
-   *   nhân rảnh từ `cursorAfter` — để không bỏ lỡ máy Xông/Châm còn trống
-   *   chỉ vì ước lượng sai.
+   *   Điện châm/Xông hơi) hơn "dự phòng" bất cứ khi nào phương án chính còn
+   *   xếp được (dù có thể muộn hơn dự phòng), tin tưởng vòng lặp linh hoạt 4
+   *   bước sẽ tự xoay xở các bước còn lại quanh đó. Trước đây có thêm bước
+   *   kiểm tra trước "otherStepsStillFeasible" (nếu chọn phương án chính,
+   *   các bước còn lại có còn xếp được không) — đã bỏ sau khi kiểm chứng
+   *   bằng nhiều kịch bản thật (đủ nhân sự lẫn khắt khe): việc kiểm tra
+   *   trước này quá THẬN TRỌNG, khiến nhiều ca bị chuyển sang Cứu ngải dù
+   *   Xông hơi vẫn còn dùng được — bỏ kiểm tra không hề làm tăng số ca thiếu
+   *   bước (vẫn 0 trên mọi kịch bản đã thử), chỉ tăng đáng kể số lượt Xông
+   *   hơi thực hiện được (VD 1 ngày 49 bệnh nhân: từ 41 lên 48 lượt Combo 1).
    * - Chế độ 'max_patients': bỏ hẳn thiên hướng ưu tiên máy, luôn chọn
    *   phương án nào cho bệnh nhân xong SỚM HƠN — để tối đa tổng số bệnh
    *   nhân phục vụ được trong ngày thay vì tối đa số lượt dùng máy Xông. */
-  function chooseBiasedOption(primaryPlan, fallbackPlan, checkStillFeasible) {
+  function chooseBiasedOption(primaryPlan, fallbackPlan) {
     if (!primaryPlan && !fallbackPlan) return null;
     if (!fallbackPlan) return { plan: primaryPlan, usedPrimary: true };
     if (!primaryPlan) return { plan: fallbackPlan, usedPrimary: false };
@@ -555,10 +559,7 @@ function generateSchedule(config, patients) {
         ? { plan: primaryPlan, usedPrimary: true }
         : { plan: fallbackPlan, usedPrimary: false };
     }
-    if (checkStillFeasible(primaryPlan.end + transferBufferMinutes)) {
-      return { plan: primaryPlan, usedPrimary: true };
-    }
-    return { plan: fallbackPlan, usedPrimary: false };
+    return { plan: primaryPlan, usedPrimary: true };
   }
 
   // ---- Xử lý từng bệnh nhân, theo 3 tầng ưu tiên:
@@ -632,28 +633,6 @@ function generateSchedule(config, patients) {
     let step1Done = false;
     let step3Done = false;
 
-    // Kiểm tra THẬT (không ước lượng) xem, nếu bệnh nhân rảnh từ `cursorAfter`
-    // trở đi, các bước CÒN LẠI (trừ bước đang xét) có còn xếp được không.
-    function otherStepsStillFeasible(excludeKey, cursorAfter) {
-      if (excludeKey !== 'step1' && !step1Done) {
-        if (!planSimpleProcedure(procByCode.XBBH, cursorAfter)) return false;
-      }
-      if (excludeKey !== 'step2' && pendingFlexSteps.includes('step2')) {
-        const okDC = (!forceStep2 || forceStep2 === 'DC') && !!planSplitProcedure(procByCode.DC, cursorAfter, fixedMonitorFor(procByCode.DC));
-        const okHC = (!forceStep2 || forceStep2 === 'HC') && !!planSplitProcedure(procByCode.HC, cursorAfter, fixedMonitorFor(procByCode.HC));
-        if (!okDC && !okHC) return false;
-      }
-      if (excludeKey !== 'step4' && pendingFlexSteps.includes('step4')) {
-        const okXH = (!forceStep4 || forceStep4 === 'XH') && !!planSimpleProcedure(procByCode.XH, cursorAfter);
-        const okCN = (!forceStep4 || forceStep4 === 'CN') && !!planSimpleProcedure(procByCode.CN, cursorAfter);
-        if (!okXH && !okCN) return false;
-      }
-      if (excludeKey !== 'step3' && !step3Done) {
-        if (!planSplitProcedure(procByCode.TC, cursorAfter, fixedMonitorFor(procByCode.TC))) return false;
-      }
-      return true;
-    }
-
     while (!step1Done || pendingFlexSteps.length > 0 || !step3Done) {
       const options = [];
 
@@ -672,7 +651,7 @@ function generateSchedule(config, patients) {
         }
         const choice = forceStep2
           ? (forceStep2 === 'DC' ? (primaryPlan && { plan: primaryPlan, usedPrimary: true }) : (fallbackPlan && { plan: fallbackPlan, usedPrimary: false }))
-          : chooseBiasedOption(primaryPlan, fallbackPlan, (cursorAfter) => otherStepsStillFeasible('step2', cursorAfter));
+          : chooseBiasedOption(primaryPlan, fallbackPlan);
         if (choice) {
           options.push({ key: 'step2', finish: choice.plan.end, choice });
         }
@@ -697,7 +676,7 @@ function generateSchedule(config, patients) {
         }
         const choice = forceStep4
           ? (forceStep4 === 'XH' ? (primaryPlan && { plan: primaryPlan, usedPrimary: true }) : (fallbackPlan && { plan: fallbackPlan, usedPrimary: false }))
-          : chooseBiasedOption(primaryPlan, fallbackPlan, (cursorAfter) => otherStepsStillFeasible('step4', cursorAfter));
+          : chooseBiasedOption(primaryPlan, fallbackPlan);
         if (choice) {
           options.push({ key: 'step4', finish: choice.plan.end, choice });
         }
