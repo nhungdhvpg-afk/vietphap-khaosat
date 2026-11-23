@@ -296,10 +296,7 @@ function readFile3_ThuThuat(rows, reg) {
 // PHÁT HIỆN CẢNH BÁO (cùng ngưỡng với script Python build_cham_cong.py)
 // ---------------------------------------------------------------------------
 const MIN_PHUT_MOI_LUOT_KHAM = 3;
-const MIN_PHUT_MOI_LUOT_CLS = 1;
 const NGUONG_DONG_THOI_TRUNG_GIO = 3;
-const NGUONG_TRUNG_GIAM_SAT_TB = 5;
-const NGUONG_TRUNG_GIAM_SAT_CAO = 7;
 
 function groupByPersonDay(events) {
   const map = new Map();
@@ -319,37 +316,28 @@ function detectWarnings(events) {
     const [person, dateKey] = pdKey.split('|');
     const intervals = evs.filter((e) => e.start && e.end);
 
-    // 1) Số bệnh nhân trùng giờ tối đa cùng lúc (sweep-line)
-    if (intervals.length >= 2) {
-      const points = [];
-      for (const e of intervals) { points.push([e.start.getTime(), 1, e]); points.push([e.end.getTime(), -1, e]); }
-      points.sort((a, b) => (a[0] - b[0]) || (a[1] - b[1]));
-      const active = [];
-      let maxConcurrent = 0, snapshot = [];
-      for (const [, delta, e] of points) {
-        if (delta === 1) active.push(e);
-        else { const idx = active.indexOf(e); if (idx >= 0) active.splice(idx, 1); }
-        if (active.length > maxConcurrent) { maxConcurrent = active.length; snapshot = active.slice(); }
-      }
-      if (maxConcurrent >= NGUONG_TRUNG_GIAM_SAT_TB) {
-        const sev = maxConcurrent >= NGUONG_TRUNG_GIAM_SAT_CAO ? 'CAO' : 'TRUNG BÌNH';
-        const desc = snapshot.slice(0, 8).map((e) => `${e.role} ${hhmm(e.start)}-${hhmm(e.end)} (BN ${e.patient})`).join('; ');
-        warnings.push({ sev, cat: 'Trùng giờ thủ thuật/dịch vụ (giám sát quá nhiều BN)', person, dateKey, detail: `Tối đa ${maxConcurrent} BN được ghi nhận trùng giờ cùng lúc trong ngày: ${desc}` });
-      }
-    }
+    // Trùng giờ nhiều bệnh nhân khi GIÁM SÁT thủ thuật đông y (vai trò "Gây
+    // mê") hoặc ĐỌC KẾT QUẢ XÉT NGHIỆM cùng lúc nhiều người là nghiệp vụ bình
+    // thường của phòng khám — KHÔNG cảnh báo các trường hợp này (xem dưới).
 
-    // 2) Sự kiện tức thời rơi vào 1 khoảng đang hoạt động khác bên (khác BN)
+    // 1) Sự kiện tức thời rơi vào 1 khoảng đang hoạt động khác bên (khác BN) —
+    // bỏ qua khi khoảng đang hoạt động là vai trò "Gây mê" (giám sát), vì 1
+    // người giám sát có thể đồng thời ra y lệnh/đọc KQ cho bệnh nhân khác.
     const instants = evs.filter((e) => e.start && !e.end);
     for (const inst of instants) {
       for (const iv of intervals) {
         if (iv.patient === inst.patient) continue;
+        if (iv.role === 'Gây mê') continue;
         if (iv.start <= inst.start && inst.start < iv.end) {
           warnings.push({ sev: 'CAO', cat: 'Trùng giờ giữa y lệnh/CLS và thủ thuật', person, dateKey, detail: `${inst.role} lúc ${hhmm(inst.start)} (BN ${inst.patient}) rơi vào trong lúc đang ${iv.role} ${hhmm(iv.start)}-${hhmm(iv.end)} (BN ${iv.patient})` });
         }
       }
     }
 
-    // 3) Nhiều bệnh nhân cùng 1 phút ở vai trò tức thời -> ghi giờ hàng loạt
+    // 2) Nhiều bệnh nhân cùng 1 phút ở vai trò tức thời -> ghi giờ hàng loạt —
+    // bỏ qua khi TOÀN BỘ là vai trò "BS đọc KQ CLS" (đọc kết quả xét nghiệm
+    // nhiều bệnh nhân cùng lúc là bình thường); vẫn cảnh báo nếu lẫn vai trò
+    // khác (VD kê đơn hàng loạt).
     const byMinute = new Map();
     for (const e of instants) {
       const mk = hhmm(e.start);
@@ -358,27 +346,33 @@ function detectWarnings(events) {
     }
     for (const [minute, evsMin] of byMinute) {
       const distinctPatients = new Set(evsMin.map((e) => e.patient));
+      const roles = new Set(evsMin.map((e) => e.role));
+      if (roles.size === 1 && roles.has('BS đọc KQ CLS')) continue;
       if (distinctPatients.size >= 2) {
         const sev = distinctPatients.size >= NGUONG_DONG_THOI_TRUNG_GIO ? 'CAO' : 'TRUNG BÌNH';
-        const roles = new Set(evsMin.map((e) => e.role));
         warnings.push({ sev, cat: 'Ghi giờ đồng thời nhiều bệnh nhân', person, dateKey, detail: `Lúc ${minute} có ${distinctPatients.size} BN khác nhau cùng được ghi nhận vai trò ${[...roles].sort().join('/')} (BN: ${[...distinctPatients].slice(0, 8).join(', ')})` });
       }
     }
 
-    // 4) Thời gian trung bình xử lý/BN quá ngắn trong ngày
+    // 3) Thời gian trung bình xử lý/BN quá ngắn trong ngày — bỏ qua hoàn
+    // toàn khi cả ngày chỉ có vai trò "BS đọc KQ CLS" (đọc nhanh nhiều kết
+    // quả xét nghiệm) hoặc "Gây mê" (giám sát nhiều BN cùng lúc, không phải
+    // xử lý tuần tự nên phép tính "thời gian/BN" không áp dụng được) — đều
+    // là nghiệp vụ bình thường, không phải dấu hiệu bất thường.
     const times = evs.filter((e) => e.start).map((e) => e.start);
     if (times.length >= 2) {
       const patients = new Set(evs.map((e) => e.patient));
-      const minT = new Date(Math.min(...times.map((t) => t.getTime())));
-      const maxT = new Date(Math.max(...times.map((t) => t.getTime())));
-      const spanMin = (maxT - minT) / 60000;
-      if (spanMin > 0) {
-        const avgMin = spanMin / Math.max(patients.size, 1);
-        const rolesHere = new Set(evs.map((e) => e.role));
-        const isClsReadOnly = rolesHere.size === 1 && rolesHere.has('BS đọc KQ CLS');
-        const threshold = isClsReadOnly ? MIN_PHUT_MOI_LUOT_CLS : MIN_PHUT_MOI_LUOT_KHAM;
-        if (patients.size >= 5 && avgMin < threshold) {
-          warnings.push({ sev: 'TRUNG BÌNH', cat: 'Thời gian xử lý/BN quá ngắn', person, dateKey, detail: `${patients.size} BN trong khoảng ${hhmm(minT)}-${hhmm(maxT)} (~${avgMin.toFixed(1)} phút/BN, dưới ngưỡng ${threshold} phút) - cần đối chiếu hồ sơ` });
+      const rolesHere = new Set(evs.map((e) => e.role));
+      const isExemptRole = rolesHere.size === 1 && (rolesHere.has('BS đọc KQ CLS') || rolesHere.has('Gây mê'));
+      if (!isExemptRole) {
+        const minT = new Date(Math.min(...times.map((t) => t.getTime())));
+        const maxT = new Date(Math.max(...times.map((t) => t.getTime())));
+        const spanMin = (maxT - minT) / 60000;
+        if (spanMin > 0) {
+          const avgMin = spanMin / Math.max(patients.size, 1);
+          if (patients.size >= 5 && avgMin < MIN_PHUT_MOI_LUOT_KHAM) {
+            warnings.push({ sev: 'TRUNG BÌNH', cat: 'Thời gian xử lý/BN quá ngắn', person, dateKey, detail: `${patients.size} BN trong khoảng ${hhmm(minT)}-${hhmm(maxT)} (~${avgMin.toFixed(1)} phút/BN, dưới ngưỡng ${MIN_PHUT_MOI_LUOT_KHAM} phút) - cần đối chiếu hồ sơ` });
+          }
         }
       }
     }
@@ -906,7 +900,6 @@ function exportExcel(result) {
   // giữ đầy đủ dấu vết audit, không âm thầm biến mất khỏi hồ sơ xuất ra.
   const s3 = [['Mức độ', 'Loại cảnh báo', 'Họ tên', 'Ngày', 'Chi tiết', 'Trạng thái xem xét', 'Lý do / người xem xét', 'Khuyến nghị xử lý']];
   const RECOMMEND = {
-    'Trùng giờ thủ thuật/dịch vụ (giám sát quá nhiều BN)': 'Kiểm tra số giường/chỗ thực tế có đủ để giám sát đồng thời số BN này không. Nếu vượt khả năng giám sát thực tế, cần bổ sung nhân sự hoặc điều chỉnh lịch, tránh bị giám định BHYT nghi ngờ kê khống dịch vụ.',
     'Trùng giờ giữa y lệnh/CLS và thủ thuật': 'Kiểm tra lại người thực hiện thực tế (có thể do nhân viên khác ký thay/nhập hộ). Đính chính dữ liệu trước khi quyết toán BHYT.',
     'Ghi giờ đồng thời nhiều bệnh nhân': 'Kiểm tra có phải nhập liệu hàng loạt (backdate) hay không. Nếu là thao tác nhập liệu (không phải giờ khám thực), cần chỉnh quy trình nhập liệu để đúng thời gian thực tế.',
     'Thời gian xử lý/BN quá ngắn': 'Rà soát khả năng đảm bảo thời gian khám/đọc KQ tối thiểu theo quy định chuyên môn; nguy cơ BHXH xuất toán khi giám định hồ sơ.',
@@ -940,6 +933,7 @@ function exportExcel(result) {
     '  - 1 ca = 0,5 công. Đủ sáng và chiều trong ngày = 1 công; chỉ 1 buổi = 0,5 công; không có ca = để trống.',
     '  - So khớp tên bác sĩ bỏ khoảng trắng thừa, không phân biệt hoa/thường.', '',
     '3. GIẢ ĐỊNH XỬ LÝ KHÁC (CẦN NGƯỜI PHỤ TRÁCH NHÂN SỰ XÁC NHẬN LẠI)',
+    "  - KHÔNG cảnh báo khi 1 người GIÁM SÁT nhiều thủ thuật đông y cùng lúc (vai trò 'Gây mê') hoặc ĐỌC KẾT QUẢ XÉT NGHIỆM nhiều bệnh nhân cùng lúc ('BS đọc KQ CLS') — đây là nghiệp vụ bình thường của phòng khám, không phải dấu hiệu sai lệch.",
     `  - Trong file Sổ thủ thuật, cột 'TTV chính' phần lớn để trống và tên người thực hiện thực tế lại nằm ở cột 'TTV phụ' (${missingPerformer} dòng không xác định được người thực hiện rõ ràng). Công cụ tự động dùng 'TTV phụ' làm người thực hiện chính khi 'TTV chính' bỏ trống.`,
     `  - Đã loại ${outOfScopeCount || 0} sự kiện rơi ra ngoài tháng ${pad2(month)}/${year} khỏi toàn bộ báo cáo này (thường do file 'chi phí chi tiết' kèm vài dòng gối đầu từ kỳ trước) — chỉ giữ lại đúng phạm vi 1 tháng để không lẫn dữ liệu ngoài kỳ.`,
     possibleNonDoctor && possibleNonDoctor.length
