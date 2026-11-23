@@ -132,9 +132,15 @@ function extractAge(s) {
  * KCB, vì 1 lượt phụ thu có thể được cấp Mã KCB khác dù là cùng 1 người
  * trong cùng 1 ngày (dẫn tới báo trùng giờ sai). Chỉ dùng cho so sánh nội
  * bộ; "Mã KCB" gốc vẫn giữ nguyên để hiển thị cho người dùng.
+ *
+ * Trả về null khi KHÔNG có Họ tên (dòng dữ liệu thiếu thông tin) — tránh
+ * trường hợp nhiều dòng đều để trống Họ tên/Tuổi/Địa chỉ bị gộp nhầm thành
+ * "cùng 1 người" (chỉ vì cùng để trống), khiến bỏ sót cảnh báo trùng giờ
+ * thật. Khi đó nơi gọi sẽ tự quay lại dùng Mã KCB để so sánh (xem idOf()).
  */
 function patientIdentityOf(hoTen, tuoi, diaChi, dateKey) {
-  return `${normKey(hoTen) || ''}|${extractAge(tuoi)}|${normKey(diaChi) || ''}|${dateKey}`;
+  if (!normKey(hoTen)) return null;
+  return `${normKey(hoTen)}|${extractAge(tuoi)}|${normKey(diaChi) || ''}|${dateKey}`;
 }
 
 function makeNameRegistry() {
