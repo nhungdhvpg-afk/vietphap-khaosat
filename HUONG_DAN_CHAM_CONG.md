@@ -1,10 +1,11 @@
 # Hướng dẫn — Bảng chấm công Y sĩ - Bác sĩ
 
 Module này đọc 3 báo cáo xuất từ phần mềm HIS (Bảng kê chi phí chi tiết, Sổ
-kết quả CLS theo bác sĩ, Sổ thủ thuật trong ngày làm), tự động dựng bảng chấm
-công theo ngày cho toàn bộ y sĩ/bác sĩ có tên trong 3 file, và phát hiện các
-dấu hiệu nghi vấn (trùng giờ, ghi giờ hàng loạt, thời gian xử lý quá ngắn...)
-có nguy cơ bị BHXH xuất toán khi giám định.
+kết quả CLS theo bác sĩ, Sổ thủ thuật trong ngày làm), tự động tính **công**
+cho toàn bộ y sĩ/bác sĩ có tên trong 3 file theo đúng khung giờ hành chính
+(1 ca = 0,5 công; đủ sáng + chiều = 1 công), và phát hiện các dấu hiệu nghi
+vấn (trùng giờ, ghi giờ hàng loạt, thời gian xử lý quá ngắn...) có nguy cơ
+bị BHXH xuất toán khi giám định.
 
 **Toàn bộ việc đọc file và tính toán chạy NGAY TRONG TRÌNH DUYỆT** — không có
 dữ liệu bệnh nhân/BHYT nào được gửi lên server hay lưu vào Supabase. Kết quả
@@ -35,20 +36,32 @@ chỉ tồn tại trên máy đang mở trình duyệt, cho đến khi bấm t�
    diện file nào là gì dựa vào nội dung và hiện tên file vào đúng ô ① ② ③.
    Nếu 1 file không nhận diện được, khung màu đỏ sẽ báo tên file đó để kiểm
    tra lại (thường do đổi cấu trúc cột/tiêu đề so với bản mẫu).
-4. Bấm **"⚙ Xử lý & lập bảng chấm công"**. Sau vài giây, kết quả hiện ngay:
-   - Bảng chấm công **chi tiết** (giờ hoạt động sớm nhất - muộn nhất mỗi người mỗi ngày).
-   - Bảng chấm công **rút gọn** (chỉ đánh dấu "1" cho ngày có đi làm — dùng nhanh để đếm công).
+4. Kiểm tra (hoặc sửa) **khung giờ hành chính** ngay dưới — mặc định Sáng
+   07:00-11:30, Chiều 13:30-17:00. Bản ghi ngoài khung giờ này bị loại, không
+   tính công.
+5. Bấm **"⚙ Xử lý & lập bảng chấm công"**. Sau vài giây, kết quả hiện ngay:
+   - **Chấm công BS theo ngày** — ma trận mỗi ô 1 (đủ công) / 0,5 (nửa công) / trống.
+   - **Chấm công ngày (tổng hợp)** — rút gọn theo bác sĩ, có dòng TỔNG, dùng để chốt công cuối tháng.
+   - **Chấm công chi tiết** — giờ hoạt động sớm nhất - muộn nhất mỗi người mỗi ngày (chỉ tính trong khung giờ).
    - Danh sách cảnh báo nghi vấn, xếp theo mức độ CAO trước.
-5. Bấm **"⬇ Tải Excel đầy đủ (5 sheet)"** để lưu lại hồ sơ: Chấm công chi
-   tiết · Chấm công rút gọn · Chi tiết hoạt động (nhật ký từng lượt) · Cảnh
-   báo · Ghi chú & căn cứ pháp lý.
-6. Với mọi dòng cảnh báo mức **CAO**, đối chiếu lại hồ sơ giấy/camera trước
+6. Sửa khung giờ xong, bấm lại "⚙ Xử lý" để tính lại ngay — **không cần tải file lại**.
+7. Bấm **"⬇ Tải Excel đầy đủ (6 sheet)"** để lưu lại hồ sơ: Chấm công BS ·
+   Chấm công ngày · Chấm công chi tiết · Chi tiết hoạt động (nhật ký từng
+   lượt, có cột Ca) · Cảnh báo · Ghi chú & căn cứ pháp lý.
+8. Với mọi dòng cảnh báo mức **CAO**, đối chiếu lại hồ sơ giấy/camera trước
    khi gửi hồ sơ đề nghị thanh toán BHYT.
+
+**Quy tắc chấm công theo ca (bắt buộc):** 1 bác sĩ được tính 1 ca ở 1 buổi
+trong ngày nếu có ít nhất 1 bản ghi (từ bất kỳ nguồn nào) rơi trong khung giờ
+hành chính của buổi đó — nhiều bản ghi cùng buổi vẫn chỉ tính 1 ca. Riêng Sổ
+thủ thuật (có giờ bắt đầu-kết thúc): **cả 2 mốc** phải cùng nằm trong 1 khung
+mới tính — ca lấn qua giờ nghỉ trưa hoặc ngoài giờ hành chính bị loại hoàn
+toàn. 1 ca = 0,5 công; đủ sáng + chiều = 1 công.
 
 **Lưu ý quan trọng:** "Giờ hoạt động" là giờ đầu-cuối các sự kiện hệ thống
 HIS ghi nhận trong ngày — KHÔNG PHẢI giờ vào/ra qua máy chấm công vân
 tay/camera thực tế. Dùng để rà soát/đối chiếu, không dùng trực tiếp để tính
-lương. Chi tiết giả định xử lý dữ liệu xem trong sheet "5.GhiChu" của file
+lương. Chi tiết giả định xử lý dữ liệu xem trong sheet "6.GhiChu" của file
 Excel xuất ra, hoặc tab "Cài đặt" của trang.
 
 **Tự kiểm tra dữ liệu đầu vào:** công cụ tự lọc bỏ các sự kiện rơi ra ngoài
