@@ -120,6 +120,23 @@ function titleCase(raw) {
   return raw.split(' ').map((w) => w ? w.charAt(0).toUpperCase() + w.slice(1).toLowerCase() : w).join(' ');
 }
 
+/** Lấy phần số trong chuỗi tuổi (VD "25 " -> "25", "81 tuổi" -> "81") để so
+ * sánh ổn định giữa các file dù cách ghi khác nhau. */
+function extractAge(s) {
+  const m = String(s || '').match(/\d+/);
+  return m ? m[0] : '';
+}
+
+/** Khoá định danh BỆNH NHÂN THỰC TẾ (Họ tên + Tuổi + Địa chỉ + Ngày), dùng
+ * để so "trùng giờ khác bệnh nhân" khi kiểm tra cảnh báo — KHÔNG dùng Mã
+ * KCB, vì 1 lượt phụ thu có thể được cấp Mã KCB khác dù là cùng 1 người
+ * trong cùng 1 ngày (dẫn tới báo trùng giờ sai). Chỉ dùng cho so sánh nội
+ * bộ; "Mã KCB" gốc vẫn giữ nguyên để hiển thị cho người dùng.
+ */
+function patientIdentityOf(hoTen, tuoi, diaChi, dateKey) {
+  return `${normKey(hoTen) || ''}|${extractAge(tuoi)}|${normKey(diaChi) || ''}|${dateKey}`;
+}
+
 function makeNameRegistry() {
   const display = new Map(); // key chuẩn hoá -> tên hiển thị đẹp nhất
   return {
@@ -230,7 +247,7 @@ function readFile1_ChiPhi(rows, reg) {
     seen.add(dedupKey);
     events.push({
       person: key, dateKey: dateKeyOf(dt), start: dt, end: null,
-      role: 'BS kê đơn/y lệnh', patient: shs, dept: tenkp,
+      role: 'BS kê đơn/y lệnh', patient: shs, patientIdentity: shs, isBHYT: true, dept: tenkp,
       detail: `BN ${hoten || ''}`, source: '1-ChiPhi',
     });
   }
@@ -246,19 +263,24 @@ function readFile2_CLS(rows, reg) {
     const makcb = row[1];
     if (!makcb) continue;
     dataRows++;
-    const hoten = row[2], khoaCd = row[8], bsChiDinh = row[10], yeuCau = row[11];
+    const hoten = row[2], tuoi = row[3] || row[4], diaChi = row[5], coBHYT = row[6];
+    const khoaCd = row[8], bsChiDinh = row[10], yeuCau = row[11];
     const bsDocKq = row[14], ngayLam = row[15], ngayLap = row[16];
     // Đúng quy ước nghiệp vụ: BS chỉ định xét theo cột "Ngày lập", BS đọc KQ
     // xét theo cột "Ngày làm" — KHÔNG lấy chéo/dự phòng cột còn lại.
     const dtLam = parseDT(ngayLam), dtLap = parseDT(ngayLap);
     if ((ngayLam || ngayLap) && !dtLam && !dtLap) dateParseFailures++;
+    // Cột "Có BHYT": chỉ loại khi ghi RÕ "Viện phí" — Cổng giám định BHXH chỉ
+    // xét dữ liệu BHYT nên lượt viện phí trùng giờ không ảnh hưởng gì, không
+    // cần cảnh báo (nhưng VẪN giữ để tính công, xem readKhungGioInputs/buildAttendance).
+    const isBHYT = normKey(coBHYT) !== 'VIỆN PHÍ';
     if (bsChiDinh && dtLap) {
       const key = reg.register(bsChiDinh);
-      events.push({ person: key, dateKey: dateKeyOf(dtLap), start: dtLap, end: null, role: 'BS chỉ định CLS', patient: makcb, dept: khoaCd, detail: `${yeuCau || ''} - BN ${hoten || ''}`, source: '2-CLS' });
+      events.push({ person: key, dateKey: dateKeyOf(dtLap), start: dtLap, end: null, role: 'BS chỉ định CLS', patient: makcb, patientIdentity: patientIdentityOf(hoten, tuoi, diaChi, dateKeyOf(dtLap)), isBHYT, dept: khoaCd, detail: `${yeuCau || ''} - BN ${hoten || ''}`, source: '2-CLS' });
     }
     if (bsDocKq && dtLam) {
       const key = reg.register(bsDocKq);
-      events.push({ person: key, dateKey: dateKeyOf(dtLam), start: dtLam, end: null, role: 'BS đọc KQ CLS', patient: makcb, dept: khoaCd, detail: `${yeuCau || ''} - BN ${hoten || ''}`, source: '2-CLS' });
+      events.push({ person: key, dateKey: dateKeyOf(dtLam), start: dtLam, end: null, role: 'BS đọc KQ CLS', patient: makcb, patientIdentity: patientIdentityOf(hoten, tuoi, diaChi, dateKeyOf(dtLam)), isBHYT, dept: khoaCd, detail: `${yeuCau || ''} - BN ${hoten || ''}`, source: '2-CLS' });
     }
   }
   return { events, dataRows, dateParseFailures };
@@ -274,7 +296,8 @@ function readFile3_ThuThuat(rows, reg) {
     const makcb = row[1];
     if (!makcb) continue;
     dataRows++;
-    const hoten = row[2], ppTt = row[9], ngayGio = row[11];
+    const hoten = row[2], tuoi = row[3] || row[4], diaChi = row[5], coThe = row[6];
+    const ppTt = row[9], ngayGio = row[11];
     const ttvChinh = row[13], ttvPhu = row[14], gayMe = row[15];
     const parsed = parseRange(ngayGio);
     if (!parsed) { if (ngayGio) dateParseFailures++; continue; }
@@ -283,11 +306,15 @@ function readFile3_ThuThuat(rows, reg) {
     const assistant = ttvChinh ? ttvPhu : null;
     if (!performer) missingPerformer++;
     const detail = `${ppTt || ''} - BN ${hoten || ''}`;
+    const patientIdentity = patientIdentityOf(hoten, tuoi, diaChi, dateKey);
+    // Cột "Có thẻ": chỉ coi là BHYT khi ghi đúng dấu "x" — ngược lại là viện
+    // phí, loại khỏi kiểm tra trùng giờ (vẫn giữ để tính công).
+    const isBHYT = normKey(coThe) === 'X';
     // Chỉ tính công cho TTV chính, TTV phụ, Gây mê chính — cột "Giúp việc"
     // không được tính theo quy tắc nghiệp vụ chấm công.
-    if (performer) events.push({ person: reg.register(performer), dateKey, start, end, role: 'TTV chính', patient: makcb, dept: 'YHCT/Thủ thuật', detail, source: '3-ThuThuat' });
-    if (assistant) events.push({ person: reg.register(assistant), dateKey, start, end, role: 'TTV phụ', patient: makcb, dept: 'YHCT/Thủ thuật', detail, source: '3-ThuThuat' });
-    if (gayMe) events.push({ person: reg.register(gayMe), dateKey, start, end, role: 'Gây mê', patient: makcb, dept: 'YHCT/Thủ thuật', detail, source: '3-ThuThuat' });
+    if (performer) events.push({ person: reg.register(performer), dateKey, start, end, role: 'TTV chính', patient: makcb, patientIdentity, isBHYT, dept: 'YHCT/Thủ thuật', detail, source: '3-ThuThuat' });
+    if (assistant) events.push({ person: reg.register(assistant), dateKey, start, end, role: 'TTV phụ', patient: makcb, patientIdentity, isBHYT, dept: 'YHCT/Thủ thuật', detail, source: '3-ThuThuat' });
+    if (gayMe) events.push({ person: reg.register(gayMe), dateKey, start, end, role: 'Gây mê', patient: makcb, patientIdentity, isBHYT, dept: 'YHCT/Thủ thuật', detail, source: '3-ThuThuat' });
   }
   return { events, missingPerformer, dataRows, dateParseFailures };
 }
@@ -308,13 +335,21 @@ function groupByPersonDay(events) {
   return map;
 }
 
-function detectWarnings(events) {
+function detectWarnings(allEvents) {
   const warnings = []; // { sev, cat, person, dateKey, detail }
+  // Quy tắc 1: Cổng giám định BHXH chỉ xét dữ liệu BHYT — lượt viện phí
+  // trùng giờ không ảnh hưởng gì nên KHÔNG đưa vào kiểm tra trùng giờ (vẫn
+  // giữ nguyên trong bảng chấm công/công vì bác sĩ có làm việc thật).
+  const events = allEvents.filter((e) => e.isBHYT !== false);
   const byPersonDay = groupByPersonDay(events);
 
   for (const [pdKey, evs] of byPersonDay) {
     const [person, dateKey] = pdKey.split('|');
     const intervals = evs.filter((e) => e.start && e.end);
+    // Quy tắc 2: so "khác bệnh nhân" theo định danh THỰC (Họ tên+Tuổi+Địa
+    // chỉ+Ngày), không theo Mã KCB — phòng trường hợp 1 lượt phụ thu được
+    // cấp Mã KCB khác dù cùng 1 người, khiến báo trùng giờ sai.
+    const idOf = (e) => e.patientIdentity || e.patient;
 
     // Trùng giờ nhiều bệnh nhân khi GIÁM SÁT thủ thuật đông y (vai trò "Gây
     // mê") hoặc ĐỌC KẾT QUẢ XÉT NGHIỆM cùng lúc nhiều người là nghiệp vụ bình
@@ -326,7 +361,7 @@ function detectWarnings(events) {
     const instants = evs.filter((e) => e.start && !e.end);
     for (const inst of instants) {
       for (const iv of intervals) {
-        if (iv.patient === inst.patient) continue;
+        if (idOf(iv) === idOf(inst)) continue;
         if (iv.role === 'Gây mê') continue;
         if (iv.start <= inst.start && inst.start < iv.end) {
           warnings.push({ sev: 'CAO', cat: 'Trùng giờ giữa y lệnh/CLS và thủ thuật', person, dateKey, detail: `${inst.role} lúc ${hhmm(inst.start)} (BN ${inst.patient}) rơi vào trong lúc đang ${iv.role} ${hhmm(iv.start)}-${hhmm(iv.end)} (BN ${iv.patient})` });
@@ -345,12 +380,14 @@ function detectWarnings(events) {
       byMinute.get(mk).push(e);
     }
     for (const [minute, evsMin] of byMinute) {
-      const distinctPatients = new Set(evsMin.map((e) => e.patient));
+      const byIdentity = new Map(); // patientIdentity -> 1 sự kiện đại diện (để hiện Mã KCB)
+      for (const e of evsMin) if (!byIdentity.has(idOf(e))) byIdentity.set(idOf(e), e);
       const roles = new Set(evsMin.map((e) => e.role));
       if (roles.size === 1 && roles.has('BS đọc KQ CLS')) continue;
-      if (distinctPatients.size >= 2) {
-        const sev = distinctPatients.size >= NGUONG_DONG_THOI_TRUNG_GIO ? 'CAO' : 'TRUNG BÌNH';
-        warnings.push({ sev, cat: 'Ghi giờ đồng thời nhiều bệnh nhân', person, dateKey, detail: `Lúc ${minute} có ${distinctPatients.size} BN khác nhau cùng được ghi nhận vai trò ${[...roles].sort().join('/')} (BN: ${[...distinctPatients].slice(0, 8).join(', ')})` });
+      if (byIdentity.size >= 2) {
+        const sev = byIdentity.size >= NGUONG_DONG_THOI_TRUNG_GIO ? 'CAO' : 'TRUNG BÌNH';
+        const bnList = [...byIdentity.values()].slice(0, 8).map((e) => e.patient).join(', ');
+        warnings.push({ sev, cat: 'Ghi giờ đồng thời nhiều bệnh nhân', person, dateKey, detail: `Lúc ${minute} có ${byIdentity.size} BN khác nhau cùng được ghi nhận vai trò ${[...roles].sort().join('/')} (BN: ${bnList})` });
       }
     }
 
@@ -361,7 +398,7 @@ function detectWarnings(events) {
     // là nghiệp vụ bình thường, không phải dấu hiệu bất thường.
     const times = evs.filter((e) => e.start).map((e) => e.start);
     if (times.length >= 2) {
-      const patients = new Set(evs.map((e) => e.patient));
+      const patients = new Set(evs.map((e) => idOf(e)));
       const rolesHere = new Set(evs.map((e) => e.role));
       const isExemptRole = rolesHere.size === 1 && (rolesHere.has('BS đọc KQ CLS') || rolesHere.has('Gây mê'));
       if (!isExemptRole) {
@@ -933,6 +970,8 @@ function exportExcel(result) {
     '  - 1 ca = 0,5 công. Đủ sáng và chiều trong ngày = 1 công; chỉ 1 buổi = 0,5 công; không có ca = để trống.',
     '  - So khớp tên bác sĩ bỏ khoảng trắng thừa, không phân biệt hoa/thường.', '',
     '3. GIẢ ĐỊNH XỬ LÝ KHÁC (CẦN NGƯỜI PHỤ TRÁCH NHÂN SỰ XÁC NHẬN LẠI)',
+    "  - CHỈ kiểm tra trùng giờ giữa các lượt BHYT — lượt viện phí (cột 'Có BHYT' ghi 'Viện phí' ở Sổ kết quả CLS, hoặc cột 'Có thẻ' không có dấu 'x' ở Sổ thủ thuật) bị loại khỏi kiểm tra trùng giờ vì Cổng giám định BHXH chỉ xét dữ liệu BHYT. Lượt viện phí VẪN được giữ nguyên trong bảng chấm công/công vì bác sĩ có làm việc thật ở ca đó — chỉ loại khỏi phần cảnh báo trùng giờ.",
+    "  - Khi xét 'khác bệnh nhân' để báo trùng giờ, so theo Họ tên + Tuổi + Địa chỉ + Ngày (không theo Mã KCB) — phòng trường hợp 1 lượt phụ thu được cấp Mã KCB khác dù là cùng 1 người trong cùng 1 ngày, tránh báo trùng giờ sai.",
     "  - KHÔNG cảnh báo khi 1 người GIÁM SÁT nhiều thủ thuật đông y cùng lúc (vai trò 'Gây mê') hoặc ĐỌC KẾT QUẢ XÉT NGHIỆM nhiều bệnh nhân cùng lúc ('BS đọc KQ CLS') — đây là nghiệp vụ bình thường của phòng khám, không phải dấu hiệu sai lệch.",
     `  - Trong file Sổ thủ thuật, cột 'TTV chính' phần lớn để trống và tên người thực hiện thực tế lại nằm ở cột 'TTV phụ' (${missingPerformer} dòng không xác định được người thực hiện rõ ràng). Công cụ tự động dùng 'TTV phụ' làm người thực hiện chính khi 'TTV chính' bỏ trống.`,
     `  - Đã loại ${outOfScopeCount || 0} sự kiện rơi ra ngoài tháng ${pad2(month)}/${year} khỏi toàn bộ báo cáo này (thường do file 'chi phí chi tiết' kèm vài dòng gối đầu từ kỳ trước) — chỉ giữ lại đúng phạm vi 1 tháng để không lẫn dữ liệu ngoài kỳ.`,
