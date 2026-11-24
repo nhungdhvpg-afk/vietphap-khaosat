@@ -224,6 +224,29 @@ function classifyBuoi(event, khungGio) {
   return 'ngoai_khung';
 }
 
+/** Chỉ áp dụng cho sự kiện đã bị loại khỏi khung giờ hành chính
+ * ('ngoai_khung'): xác định đây có phải khám ngoài giờ ở khung giờ TRƯA
+ * (sau giờ kết thúc buổi sáng, trước giờ bắt đầu buổi chiều) hay khám thêm
+ * sau giờ kết thúc buổi chiều — dùng để ghi chú "Tr"/"T" trên bảng chấm
+ * công, KHÔNG tính công. Xét cả mốc bắt đầu và kết thúc (nếu có) để không
+ * bỏ sót ca thủ thuật lấn giờ nghỉ trưa hoặc kéo dài qua sau giờ hành
+ * chính. Không đánh dấu cho trường hợp đến sớm trước giờ hành chính buổi
+ * sáng — ngoài phạm vi 2 quy tắc đã yêu cầu.
+ */
+function classifyNgoaiGioNote(event, khungGio) {
+  const sangEnd = hhmmToMinutes(khungGio.sangEnd);
+  const chieuStart = hhmmToMinutes(khungGio.chieuStart);
+  const chieuEnd = hhmmToMinutes(khungGio.chieuEnd);
+  const startMin = minutesOfDay(event.start);
+  const endMin = event.end ? minutesOfDay(event.end) : startMin;
+  const inTrua = (t) => t > sangEnd && t < chieuStart;
+  const afterChieu = (t) => t > chieuEnd;
+  const flags = [];
+  if (inTrua(startMin) || inTrua(endMin)) flags.push('Tr');
+  if (afterChieu(startMin) || afterChieu(endMin)) flags.push('T');
+  return flags;
+}
+
 // ---------------------------------------------------------------------------
 // ĐỌC 3 FILE (dùng chung 1 registry tên cho cả 3 để gộp đúng người)
 // ---------------------------------------------------------------------------
@@ -580,7 +603,7 @@ $('#btn-process').addEventListener('click', async () => {
     for (const e of allEvents) e.buoi = classifyBuoi(e, khungGio);
     const ngoaiKhungBySource = { '1-ChiPhi': 0, '2-CLS': 0, '3-ThuThuat': 0 };
     for (const e of allEvents) if (e.buoi === 'ngoai_khung') ngoaiKhungBySource[e.source]++;
-    const attendance = buildAttendance(allEvents);
+    const attendance = buildAttendance(allEvents, khungGio);
 
     // Nhân sự chỉ từng xuất hiện ở vai trò phụ (Gây mê/TTV phụ), chưa từng là
     // TTV chính/BS — có thể là kỹ thuật viên chứ không phải bác sĩ, cần xác minh.
@@ -635,8 +658,10 @@ function readKhungGioInputs() {
  * có mặt buổi sáng/chiều hay không (nhiều bản ghi cùng buổi chỉ tính 1 ca),
  * rồi suy ra công = 0 / 0,5 / 1. Trả về attendanceEvents (loại bỏ sự kiện
  * ngoài khung) để các bảng giờ sớm nhất-muộn nhất cũng chỉ phản ánh đúng giờ
- * hành chính. */
-function buildAttendance(events) {
+ * hành chính. Đồng thời dựng noteMap ghi chú "Tr"/"T" cho các ngày có khám
+ * ngoài giờ ở khung trưa / sau giờ hành chính buổi chiều (không tính công,
+ * chỉ để đối chiếu — xem classifyNgoaiGioNote). */
+function buildAttendance(events, khungGio) {
   const attendanceEvents = events.filter((e) => e.buoi !== 'ngoai_khung');
   const presence = new Map(); // `${person}|${dateKey}` -> { sang, chieu }
   for (const e of attendanceEvents) {
@@ -655,7 +680,35 @@ function buildAttendance(events) {
     if (cong > 0) congMap.set(k, cong);
   }
   const tongCong = [...congMap.values()].reduce((s, c) => s + c, 0);
-  return { attendanceEvents, presence, congMap, tongCa, tongCong };
+  const noteMap = new Map(); // `${person}|${dateKey}` -> Set('Tr'|'T')
+  for (const e of events) {
+    if (e.buoi !== 'ngoai_khung') continue;
+    const flags = classifyNgoaiGioNote(e, khungGio);
+    if (!flags.length) continue;
+    const k = `${e.person}|${e.dateKey}`;
+    if (!noteMap.has(k)) noteMap.set(k, new Set());
+    for (const f of flags) noteMap.get(k).add(f);
+  }
+  return { attendanceEvents, presence, congMap, tongCa, tongCong, noteMap };
+}
+
+const NOTE_ORDER = ['Tr', 'T'];
+function noteLabel(noteMap, person, dateKey) {
+  const set = noteMap.get(`${person}|${dateKey}`);
+  if (!set || !set.size) return '';
+  return NOTE_ORDER.filter((f) => set.has(f)).join(',');
+}
+
+/** Nhãn hiển thị cho 1 ô công: 1 = đủ công; nửa công thì ghi "S" (chỉ có ca
+ * sáng) hoặc "C" (chỉ có ca chiều) thay vì "0,5" để phân biệt rõ buổi nào;
+ * trống = không có ca. */
+function congLabel(cong, presence, person, dateKey) {
+  if (cong === 1) return '1';
+  if (cong === 0.5) {
+    const p = presence.get(`${person}|${dateKey}`);
+    return p && p.sang ? 'S' : 'C';
+  }
+  return '';
 }
 
 // ---------------------------------------------------------------------------
@@ -715,10 +768,12 @@ function renderResults(result) {
     html += `<div class="info-box" style="display:block;">${possibleNonDoctor.length} người chỉ từng xuất hiện ở vai trò phụ (Gây mê/TTV phụ), chưa từng đứng tên TTV chính/BS — có thể là kỹ thuật viên chứ không phải bác sĩ, cần xác minh lại: ${possibleNonDoctor.map(escapeHtml).join(', ')}.</div>`;
   }
 
-  // ---- Chấm công BS theo ngày (ma trận: mỗi ô 1 / 0,5 / trống theo ca) ----
-  html += `<div class="panel"><h3>Chấm công BS theo ngày</h3><p class="muted" style="margin-top:0;">Mỗi ô: <b>1</b> = đủ công (có mặt cả sáng và chiều), <b>0,5</b> = nửa công (chỉ 1 buổi), để trống = không có ca. Chỉ tính bản ghi trong khung giờ hành chính.</p><div class="matrix-wrap"><table><thead><tr>
-    <th>Họ tên</th><th>Ngày đủ (1)</th><th>Nửa ngày (0,5)</th><th>Tổng công</th><th>Cảnh báo CAO</th>`;
-  for (let d = 1; d <= daysInMonth; d++) html += `<th>${pad2(d)}</th>`;
+  // ---- Chấm công BS theo ngày (ma trận: mỗi ô 1 / S / C / trống theo ca, kèm cột GC) ----
+  html += `<div class="panel"><h3>Chấm công BS theo ngày</h3><p class="muted" style="margin-top:0;">Mỗi ô: <b>1</b> = đủ công (có mặt cả sáng và chiều), <b>S</b> = nửa công chỉ ca sáng, <b>C</b> = nửa công chỉ ca chiều, để trống = không có ca (S/C đều tính 0,5 công). Cột <b>GC</b> bên cạnh mỗi ngày: <b>Tr</b> = có khám ngoài giờ trong khung giờ nghỉ trưa, <b>T</b> = có khám thêm sau giờ hành chính buổi chiều — 2 trường hợp này KHÔNG tính công, chỉ ghi chú để đối chiếu.</p><div class="matrix-wrap"><table><thead><tr>
+    <th rowspan="2">Họ tên</th><th rowspan="2">Ngày đủ (1)</th><th rowspan="2">Nửa ngày (0,5 công)</th><th rowspan="2">Tổng công</th><th rowspan="2">Cảnh báo CAO</th>`;
+  for (let d = 1; d <= daysInMonth; d++) html += `<th colspan="2">${pad2(d)}</th>`;
+  html += `</tr><tr>`;
+  for (let d = 1; d <= daysInMonth; d++) html += `<th class="sub-th">Công</th><th class="sub-th">GC</th>`;
   html += `</tr></thead><tbody>`;
   const perPersonCong = new Map(); // person -> { full, half, total }
   for (const person of persons) {
@@ -729,9 +784,10 @@ function renderResults(result) {
       const cong = attendance.congMap.get(`${person}|${dateKey}`);
       const isWarn = warnCaoCells.has(`${person}|${dateKey}`);
       if (isWarn) nHighWarn++;
-      if (cong === 1) { full++; rowCells += `<td${isWarn ? ' class="cell-warn"' : ''}>1</td>`; }
-      else if (cong === 0.5) { half++; rowCells += `<td${isWarn ? ' class="cell-warn"' : ''}>0,5</td>`; }
-      else { rowCells += `<td${isWarn ? ' class="cell-warn"' : ''}></td>`; }
+      if (cong === 1) full++;
+      else if (cong === 0.5) half++;
+      const note = noteLabel(attendance.noteMap, person, dateKey);
+      rowCells += `<td${isWarn ? ' class="cell-warn"' : ''}>${congLabel(cong, attendance.presence, person, dateKey)}</td><td${note ? ' class="cell-note"' : ''}>${note}</td>`;
     }
     const total = full + half * 0.5;
     perPersonCong.set(person, { full, half, total });
@@ -869,13 +925,13 @@ function exportExcel(result) {
     perPersonCong.set(person, { full, half, total: full + half * 0.5 });
   }
 
-  // Sheet 1 — Chấm công BS (ma trận theo ngày, mỗi ô 1 / 0,5 / trống)
+  // Sheet 1 — Chấm công BS (ma trận theo ngày, mỗi ô 1 / S / C / trống, kèm cột GC)
   const s1 = [];
   s1.push([`CHẤM CÔNG BS THEO NGÀY - THÁNG ${pad2(month)}/${year} - PHÒNG KHÁM ĐA KHOA VIỆT PHÁP`]);
-  s1.push([`Khung giờ hành chính: Sáng ${khungGio.sangStart}-${khungGio.sangEnd}, Chiều ${khungGio.chieuStart}-${khungGio.chieuEnd}. Mỗi ô: 1 = đủ công (sáng+chiều), 0,5 = nửa công (1 buổi), trống = không có ca. Bản ghi ngoài khung giờ đã bị loại, không tính công — xem sheet 6.GhiChu.`]);
+  s1.push([`Khung giờ hành chính: Sáng ${khungGio.sangStart}-${khungGio.sangEnd}, Chiều ${khungGio.chieuStart}-${khungGio.chieuEnd}. Cột "Công": 1 = đủ công (sáng+chiều), S = nửa công chỉ ca sáng, C = nửa công chỉ ca chiều (S/C đều 0,5 công), trống = không có ca. Cột "GC" (ghi chú, không tính công): Tr = có khám ngoài giờ trong khung giờ nghỉ trưa, T = có khám thêm sau giờ hành chính buổi chiều. Bản ghi ngoài khung giờ đã bị loại, không tính công — xem sheet 6.GhiChu.`]);
   s1.push([]);
-  const header1 = ['Họ tên', 'Ngày đủ (1)', 'Nửa ngày (0,5)', 'Tổng công', 'Cảnh báo CAO'];
-  for (let d = 1; d <= daysInMonth; d++) header1.push(pad2(d));
+  const header1 = ['Họ tên', 'Ngày đủ (1)', 'Nửa ngày (0,5 công)', 'Tổng công', 'Cảnh báo CAO'];
+  for (let d = 1; d <= daysInMonth; d++) header1.push(`${pad2(d)}-Công`, `${pad2(d)}-GC`);
   s1.push(header1);
   for (const person of persons) {
     const { full, half, total } = perPersonCong.get(person);
@@ -885,7 +941,7 @@ function exportExcel(result) {
       const dateKey = `${year}-${pad2(month)}-${pad2(d)}`;
       const cong = attendance.congMap.get(`${person}|${dateKey}`);
       if (warnCaoCells.has(`${person}|${dateKey}`)) nHighWarn++;
-      dayCells.push(cong === 1 ? 1 : cong === 0.5 ? '0,5' : '');
+      dayCells.push(congLabel(cong, attendance.presence, person, dateKey), noteLabel(attendance.noteMap, person, dateKey));
     }
     s1.push([reg.displayName(person), full, half, String(total).replace('.', ','), nHighWarn, ...dayCells]);
   }
@@ -973,7 +1029,8 @@ function exportExcel(result) {
     '  - 1 bác sĩ được tính 1 ca ở 1 buổi trong ngày nếu có ít nhất 1 bản ghi (từ bất kỳ nguồn nào) rơi trong khung giờ của buổi đó. Nhiều bản ghi cùng buổi vẫn chỉ tính 1 ca.',
     '  - Với Sổ thủ thuật (có giờ bắt đầu-kết thúc): CẢ HAI mốc phải cùng nằm trong 1 khung mới tính ca đó — thủ thuật lấn qua giờ nghỉ trưa hoặc ngoài giờ hành chính bị loại hoàn toàn.',
     `  - Bản ghi ngoài khung giờ bị loại, không tính công. Tổng cộng đã loại ${tongNgoaiKhung} bản ghi (Bảng kê chi phí: ${ngoaiKhungBySource['1-ChiPhi']} · Sổ kết quả CLS: ${ngoaiKhungBySource['2-CLS']} · Sổ thủ thuật: ${ngoaiKhungBySource['3-ThuThuat']}) — các dòng này vẫn giữ trong sheet 4.ChiTietHoatDong, đánh dấu "Ngoài khung" ở cột Ca, không bị xoá.`,
-    '  - 1 ca = 0,5 công. Đủ sáng và chiều trong ngày = 1 công; chỉ 1 buổi = 0,5 công; không có ca = để trống.',
+    '  - 1 ca = 0,5 công. Đủ sáng và chiều trong ngày = 1 công; chỉ 1 buổi = 0,5 công (ghi "S" nếu chỉ có ca sáng, "C" nếu chỉ có ca chiều); không có ca = để trống.',
+    "  - Cột 'GC' (ghi chú) đi kèm mỗi ngày trong sheet 1.ChamCongBS: 'Tr' = có khám ngoài giờ trong khung giờ nghỉ trưa (sau giờ kết thúc ca sáng, trước giờ bắt đầu ca chiều); 'T' = có khám thêm sau giờ kết thúc ca chiều. Cả 2 trường hợp đều KHÔNG tính công (đã bị loại theo đúng quy tắc 'cả 2 mốc phải cùng khung' ở trên) — chỉ ghi chú để người phụ trách đối chiếu, không cộng vào Tổng công.",
     '  - So khớp tên bác sĩ bỏ khoảng trắng thừa, không phân biệt hoa/thường.', '',
     '3. GIẢ ĐỊNH XỬ LÝ KHÁC (CẦN NGƯỜI PHỤ TRÁCH NHÂN SỰ XÁC NHẬN LẠI)',
     "  - CHỈ kiểm tra trùng giờ giữa các lượt BHYT — lượt viện phí (cột 'Có BHYT' ghi 'Viện phí' ở Sổ kết quả CLS, hoặc cột 'Có thẻ' không có dấu 'x' ở Sổ thủ thuật) bị loại khỏi kiểm tra trùng giờ vì Cổng giám định BHXH chỉ xét dữ liệu BHYT. Lượt viện phí VẪN được giữ nguyên trong bảng chấm công/công vì bác sĩ có làm việc thật ở ca đó — chỉ loại khỏi phần cảnh báo trùng giờ.",
