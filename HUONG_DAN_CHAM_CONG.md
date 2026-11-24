@@ -40,7 +40,10 @@ chỉ tồn tại trên máy đang mở trình duyệt, cho đến khi bấm t�
    07:00-11:30, Chiều 13:30-17:00. Bản ghi ngoài khung giờ này bị loại, không
    tính công.
 5. Bấm **"⚙ Xử lý & lập bảng chấm công"**. Sau vài giây, kết quả hiện ngay:
-   - **Chấm công BS theo ngày** — ma trận mỗi ô 1 (đủ công) / 0,5 (nửa công) / trống.
+   - **Chấm công BS theo ngày** — ma trận mỗi ngày 2 cột: "Công" (1 = đủ công,
+     S = nửa công chỉ ca sáng, C = nửa công chỉ ca chiều, trống = không có ca)
+     và "GC" ghi chú ngoài giờ (Tr = có khám trong giờ nghỉ trưa, T = có khám
+     thêm sau giờ hành chính buổi chiều — 2 trường hợp này KHÔNG tính công).
    - **Chấm công ngày (tổng hợp)** — rút gọn theo bác sĩ, có dòng TỔNG, dùng để chốt công cuối tháng.
    - **Chấm công chi tiết** — giờ hoạt động sớm nhất - muộn nhất mỗi người mỗi ngày (chỉ tính trong khung giờ).
    - Danh sách cảnh báo nghi vấn, xếp theo mức độ CAO trước.
@@ -56,7 +59,9 @@ trong ngày nếu có ít nhất 1 bản ghi (từ bất kỳ nguồn nào) rơi
 hành chính của buổi đó — nhiều bản ghi cùng buổi vẫn chỉ tính 1 ca. Riêng Sổ
 thủ thuật (có giờ bắt đầu-kết thúc): **cả 2 mốc** phải cùng nằm trong 1 khung
 mới tính — ca lấn qua giờ nghỉ trưa hoặc ngoài giờ hành chính bị loại hoàn
-toàn. 1 ca = 0,5 công; đủ sáng + chiều = 1 công.
+toàn (cột "GC" của ngày đó sẽ ghi "Tr" nếu phần lấn rơi vào giờ nghỉ trưa,
+hoặc "T" nếu kéo dài qua sau giờ hành chính buổi chiều, để đối chiếu — không
+tính công). 1 ca = 0,5 công (hiển thị S/C); đủ sáng + chiều = 1 công.
 
 **Lưu ý quan trọng:** "Giờ hoạt động" là giờ đầu-cuối các sự kiện hệ thống
 HIS ghi nhận trong ngày — KHÔNG PHẢI giờ vào/ra qua máy chấm công vân
